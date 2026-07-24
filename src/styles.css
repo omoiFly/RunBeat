@@ -1,12 +1,19 @@
 @font-face {
   /*
-   * The converted font is named "14px", but its outlines land on the device
-   * pixel grid at 15 CSS px (and integer multiples such as 30px). Give it an
-   * application-specific name so the misleading source name does not leak
-   * into the sizing rules below.
+   * The small face contains every character authored in RunBeat's production
+   * UI. The complete face is a lazy fallback for arbitrary project and track
+   * names, so the first render does not require the full CJK font.
    */
-  font-family: "RunBeat Bitmap UI";
-  src: url("/fonts/wenquanyi-bitmap-song/WenQuanYi-Bitmap-Song-14px.ttf") format("truetype");
+  font-family: "RunBeat Bitmap UI Core";
+  src: url("./assets/fonts/runbeat-bitmap-ui-core.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "RunBeat Bitmap UI Full";
+  src: url("./assets/fonts/wenquanyi-bitmap-song-14px-full.woff2") format("woff2");
   font-style: normal;
   font-weight: 400;
   font-display: swap;
@@ -14,7 +21,7 @@
 
 :root {
   color-scheme: light;
-  font-family: "RunBeat Bitmap UI", "MS Shell Dlg", "SimSun", "宋体", "NSimSun", "新宋体", serif;
+  font-family: "RunBeat Bitmap UI Core", "RunBeat Bitmap UI Full", "MS Shell Dlg", "SimSun", "宋体", "NSimSun", "新宋体", serif;
   color: #222;
   background: #008080;
   /*
@@ -24,8 +31,8 @@
    * hierarchy, so keep the authored bitmap weight intact.
   */
   font-synthesis: none;
-  --ui-font: "RunBeat Bitmap UI", "MS Shell Dlg", "SimSun", "宋体", "NSimSun", "新宋体", serif;
-  --chrome-font: "RunBeat Bitmap UI", "MS Shell Dlg", "SimSun", "宋体", sans-serif;
+  --ui-font: "RunBeat Bitmap UI Core", "RunBeat Bitmap UI Full", "MS Shell Dlg", "SimSun", "宋体", "NSimSun", "新宋体", serif;
+  --chrome-font: "RunBeat Bitmap UI Core", "RunBeat Bitmap UI Full", "MS Shell Dlg", "SimSun", "宋体", sans-serif;
   --ui-font-size: 15px;
   --ui-line-height: 17px;
   --display-font-size: 30px;
@@ -64,10 +71,6 @@ html,
 body {
   overflow: hidden;
   background: var(--desktop);
-}
-
-html[data-startup="loading"] #root {
-  visibility: hidden;
 }
 
 body {
@@ -2192,6 +2195,23 @@ u {
 
 .message-box-actions button {
   min-width: 82px;
+}
+
+.lazy-dialog-loading-body {
+  min-height: 74px;
+  padding: 18px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.lazy-dialog-loading-body > span {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 3px dotted var(--navy);
+  animation: rotate 1s steps(8) infinite;
 }
 
 @keyframes rotate {

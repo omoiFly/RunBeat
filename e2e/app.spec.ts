@@ -90,12 +90,28 @@ test("classic document shell uses property sheets and context help", async ({ pa
   await page.getByRole("dialog", { name: "RunBeat 帮助主题" }).getByRole("button", { name: "关闭", exact: true }).click();
 });
 
-test("startup waits for the bitmap font and Help switches the persisted interface language", async ({ page }) => {
+test("startup loads the core bitmap font and Help switches the persisted interface language", async ({ page }) => {
   await waitForStudio(page);
 
   await expect(page.locator("html")).toHaveAttribute("data-startup", "ready");
   await expect(page.locator("html")).toHaveAttribute("data-ui-font-mode", "bitmap");
-  expect(await page.evaluate(() => document.fonts.check('15px "RunBeat Bitmap UI"', "中文 English 0123456789"))).toBe(true);
+  expect(await page.evaluate(() => document.fonts.check('15px "RunBeat Bitmap UI Core"', "中文 English 0123456789"))).toBe(true);
+  const initialResources = await page.evaluate(() => performance
+    .getEntriesByType("resource")
+    .map((entry) => entry.name));
+  expect(initialResources.some((name) => name.includes("runbeat-bitmap-ui-core"))).toBe(true);
+  expect(initialResources.some((name) => name.includes("wenquanyi-bitmap-song-14px-full"))).toBe(false);
+  for (const deferredResource of [
+    "analysis.worker",
+    "essentia-wasm",
+    "ffmpeg-core",
+    "rubberband",
+    "renderAudio",
+    "ProjectPropertiesDialog",
+    "ExportDialogController"
+  ]) {
+    expect(initialResources.some((name) => name.includes(deferredResource))).toBe(false);
+  }
 
   const chineseMenu = page.getByRole("menubar", { name: "应用程序菜单" });
   await chineseMenu.getByRole("menuitem", { name: /帮助\(H\)/ }).click();
@@ -190,9 +206,26 @@ test("fractional display scaling uses system vector UI fonts", async ({ browser 
     const fontFamily = await page.locator("body").evaluate((body) => getComputedStyle(body).fontFamily);
     expect(fontFamily).toContain("Tahoma");
     expect(fontFamily).not.toContain("RunBeat Bitmap UI");
+    const fontResources = await page.evaluate(() => performance
+      .getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .filter((name) => name.includes("runbeat-bitmap-ui-core") || name.includes("wenquanyi-bitmap-song-14px-full")));
+    expect(fontResources).toEqual([]);
   } finally {
     await context.close();
   }
+});
+
+test("the complete bitmap font stays lazy until a user-provided glyph needs it", async ({ page }) => {
+  await waitForStudio(page);
+  await openProjectProperties(page);
+  const properties = page.getByRole("dialog", { name: "项目属性" });
+  await properties.locator("#project-property-name").fill("龘");
+  await properties.getByRole("button", { name: "确定", exact: true }).click();
+
+  await expect.poll(() => page.evaluate(() => performance
+    .getEntriesByType("resource")
+    .some((entry) => entry.name.includes("wenquanyi-bitmap-song-14px-full")))).toBe(true);
 });
 
 test("projects save explicitly and guard destructive navigation", async ({ page }) => {
@@ -277,7 +310,9 @@ test("track projects are automatically named, saved, and restored after refresh"
 
 test("detailed track list analyzes locally and exports a localized timeline", async ({ page }) => {
   const browserErrors: string[] = [];
+  const requestedResources: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
+  page.on("request", (request) => requestedResources.push(request.url()));
   await waitForStudio(page);
 
   const [chooser] = await Promise.all([
@@ -289,6 +324,10 @@ test("detailed track list analyzes locally and exports a localized timeline", as
   const grid = page.getByRole("grid", { name: "歌曲详细列表" });
   await expect(grid.getByText("click-176.wav")).toBeVisible();
   await expect(grid.getByText("分析完成")).toBeVisible({ timeout: 80_000 });
+  expect(requestedResources.some((name) => name.includes("analysis.worker"))).toBe(true);
+  expect(requestedResources.some((name) => name.includes("essentia-wasm.es"))).toBe(true);
+  await expect.poll(() => requestedResources.some((name) => name.includes("rubberband-") && name.endsWith(".wasm"))).toBe(true);
+  await expect.poll(() => requestedResources.some((name) => name.includes("ffmpeg-core-") && name.endsWith(".wasm"))).toBe(true);
   await expect(grid.getByRole("columnheader")).toHaveCount(10);
   await expect(grid.getByRole("columnheader", { name: "原始 BPM" })).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "拍点" })).toBeVisible();

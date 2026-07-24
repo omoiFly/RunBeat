@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ProjectV1, Track } from "../../domain/types";
 import { useI18n } from "../../i18n";
-import { playPreview, stopPreview } from "../../services/preview";
-import { previewSourceRange, previewStartBounds } from "../../services/renderAudio";
+import { previewSourceRange, previewStartBounds } from "../../services/previewRange";
 import { formatDuration } from "../../utils/format";
 import { ClassicIcon } from "../ClassicIcon";
 
@@ -19,6 +18,13 @@ const INSPECTOR_TABS: Array<{ id: InspectorTab; label: string }> = [
   { id: "preview", label: "试听" },
   { id: "advanced", label: "高级" }
 ];
+
+let previewServicePromise: Promise<typeof import("../../services/preview")> | undefined;
+
+function loadPreviewService(): Promise<typeof import("../../services/preview")> {
+  previewServicePromise ??= import("../../services/preview");
+  return previewServicePromise;
+}
 
 type Translate = ReturnType<typeof useI18n>["t"];
 
@@ -78,7 +84,7 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
 
   const stop = useCallback(() => {
     previewRequest.current += 1;
-    stopPreview();
+    void previewServicePromise?.then(({ stopPreview }) => stopPreview());
     setPreviewing(undefined);
   }, []);
 
@@ -88,6 +94,8 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
     previewRequest.current = id;
     setPreviewing({ id, trackId: track.id, mode, status: "preparing" });
     try {
+      const { playPreview } = await loadPreviewService();
+      if (previewRequest.current !== id) return;
       await playPreview(track, project, mode, previewRange?.startSeconds);
     } catch (error) {
       if (previewRequest.current === id) setPreviewing(undefined);

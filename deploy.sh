@@ -57,8 +57,8 @@ listen_port_number=$((10#${listen_port}))
 (( listen_port_number >= 1 && listen_port_number <= 65535 )) \
   || fail 'port must be between 1 and 65535'
 
-rubberband_js="${project_dir}/public/wasm/rubberband.js"
-rubberband_wasm="${project_dir}/public/wasm/rubberband.wasm"
+rubberband_js="${project_dir}/src/assets/wasm/rubberband.js"
+rubberband_wasm="${project_dir}/src/assets/wasm/rubberband.wasm"
 for runtime_asset in "$rubberband_js" "$rubberband_wasm"; do
   [[ -s "$runtime_asset" ]] || fail \
     "missing prebuilt asset: ${runtime_asset#"${project_dir}/"}; rebuild and commit the Rubber Band WASM files before deploying"
@@ -133,11 +133,6 @@ http {
         location ^~ /assets/ {
             try_files \$uri =404;
             add_header Cache-Control "public, max-age=31536000, immutable";
-        }
-
-        location ^~ /wasm/ {
-            try_files \$uri =404;
-            add_header Cache-Control "public, max-age=0, must-revalidate" always;
         }
 
         location = /index.html {

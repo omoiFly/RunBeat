@@ -107,6 +107,16 @@ function withDerived(project: ProjectV1): ProjectV1 {
 
 let persistQueue: Promise<void> = Promise.resolve();
 
+function prefetchRubberBandForPreview(): void {
+  void import("../services/runtimePreload")
+    .then(({ prefetchRubberBandRuntime }) => prefetchRubberBandRuntime());
+}
+
+function prefetchFfmpegForExport(): void {
+  void import("../services/runtimePreload")
+    .then(({ prefetchFfmpegRuntime }) => prefetchFfmpegRuntime());
+}
+
 function cloneProject(project: ProjectV1): ProjectV1 {
   return structuredClone(project);
 }
@@ -259,6 +269,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const nextTracks = [...current.tracks, ...tracks];
     const project = projectAfterTrackChange(current, nextTracks);
     set((state) => ({ ...dirtyProject(state, project), busy: true }));
+    prefetchRubberBandForPreview();
     const concurrency = recommendedAnalysisConcurrency(
       tracks.length,
       Math.max(...files.map((file) => file.size))
@@ -285,6 +296,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             ? state
             : { project: { ...state.project, tracks: state.project.tracks.map((item) => item.id === track.id ? { ...item, durationSeconds: decoded.duration, edit: { ...item.edit, sourceOutSeconds: decoded.duration }, status: "analyzing-bpm" } : item) } });
           const analysis = await analysisPool.analyze(track.id, decoded.mono, decoded.sampleRate, (stage, progress) => {
+            if (stage === "beats" && get().project.exportSettings.format === "mp3") {
+              prefetchFfmpegForExport();
+            }
             set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
               ? state
               : {
@@ -339,6 +353,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       });
       return;
     }
+    prefetchRubberBandForPreview();
     set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === trackId)
       ? state
       : {
@@ -377,6 +392,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             }
           });
       const analysis = await analyzeTrack(trackId, decoded.mono, decoded.sampleRate, (stage, progress) => {
+        if (stage === "beats" && get().project.exportSettings.format === "mp3") {
+          prefetchFfmpegForExport();
+        }
         set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === trackId)
           ? state
           : {
@@ -528,6 +546,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   updateExportSettings: (patch) => {
     const project = { ...get().project, exportSettings: { ...get().project.exportSettings, ...patch }, updatedAt: Date.now() };
     set((state) => dirtyProject(state, project));
+    if (project.exportSettings.format === "mp3") prefetchFfmpegForExport();
   },
 
   renameProject: (name) => {

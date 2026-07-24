@@ -121,6 +121,9 @@ npm run preview
 分析 Worker 会根据设备能力和文件体量自适应选择并发数。长项目会自动切换到低
 内存的两遍渲染管线，以减少浏览器内存峰值。响度标准化基于
 ITU-R BS.1770-5，并使用立体声联动 limiter 与 4× 真峰值检测控制输出峰值。
+上传歌曲后，浏览器会在分析期间低优先级预取 Rubber Band；在快速且未启用省流
+模式的网络上还会预取 FFmpeg core。慢速或计费网络不会为预取 FFmpeg 抢占分析
+带宽，仍保留按需加载路径。
 
 ## 开发
 
@@ -133,6 +136,7 @@ ITU-R BS.1770-5，并使用立体声联动 limiter 与 4× 真峰值检测控制
 | `npm run build` | 执行 TypeScript 检查并生成生产构建 |
 | `npm run test:e2e` | 使用 Playwright / Chromium 运行端到端测试 |
 | `npm run preview` | 本地预览生产构建 |
+| `npm run build:fonts` | 重新生成完整字体与界面字符子集 WOFF2 |
 | `npm run build:rubberband` | 重新构建 Rubber Band JS/WASM 产物 |
 
 提交改动前建议至少运行：
@@ -151,8 +155,9 @@ src/audio/       音频分析、混音、响度与 WAV 编码
 src/services/    项目、预览、渲染、导出与文件服务
 src/workers/     分析和渲染 Worker
 src/components/  界面与制作台组件
+src/assets/       经 Vite 内容哈希处理的字体与 WASM 运行资源
 wasm/            Rubber Band 适配代码与构建说明
-public/wasm/     可直接部署的预编译 WASM 产物
+third_party/     字体等第三方原始文件、许可证与可复现来源
 e2e/             Playwright 端到端测试
 ```
 
@@ -173,7 +178,8 @@ RunBeat 构建后是静态单页应用。仓库提供了面向本机 Nginx 和 C
 ```
 
 脚本会生成 `dist/` 和 `.deploy/nginx.conf`，并打印启动或重载 Nginx 的命令。
-生产环境必须保留 `public/wasm/` 中的预编译文件；部署端不需要安装 Emscripten。
+生产构建会将 `src/assets/` 中的预编译字体和 WASM 资源输出为带内容哈希的文件；
+部署端不需要安装 FontTools 或 Emscripten。
 
 ## 贡献
 

@@ -64,6 +64,7 @@ describe("track preview status", () => {
     fireEvent.click(screen.getByRole("button", { name: "原始音频" }));
     expect(screen.getByRole("status")).toHaveTextContent("正在准备试听片段...");
 
+    await waitFor(() => expect(playPreviewMock).toHaveBeenCalledOnce());
     playbackStarted();
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("试听中"));
   });

@@ -4,7 +4,8 @@ import type { ProjectV1, Track } from "../domain/types";
 import { decodeFile } from "./audio";
 import { getCustomBeatSample } from "./customBeat";
 import { getRegisteredFile } from "./files";
-import { prepareTrackClip, previewSourceRange } from "./renderAudio";
+import { previewSourceRange } from "./previewRange";
+import { prepareTrackClip } from "./renderAudio";
 
 let currentAudio: HTMLAudioElement | undefined;
 let currentUrl: string | undefined;

@@ -101,6 +101,11 @@ export function createAnalysisWorkerPool(
     }
   };
 
+  // Start fetching the shared Essentia worker while the first local audio file
+  // is still decoding. Remaining workers stay lazy to avoid unnecessary WASM
+  // initialization and memory use.
+  attachWorker(slots[0]);
+
   return {
     size,
     analyze: (trackId, pcm, sampleRate, onProgress) => new Promise<RawTrackAnalysis>((resolve, reject) => {

@@ -34,9 +34,16 @@ class FakeAnalysisWorker {
 
 describe("analysis worker pool", () => {
   it("accepts the adaptive high-performance limit without exceeding it", () => {
-    const pool = createAnalysisWorkerPool(MAX_ANALYSIS_WORKERS + 10, () => new FakeAnalysisWorker() as unknown as Worker);
+    const workers: FakeAnalysisWorker[] = [];
+    const pool = createAnalysisWorkerPool(MAX_ANALYSIS_WORKERS + 10, () => {
+      const worker = new FakeAnalysisWorker();
+      workers.push(worker);
+      return worker as unknown as Worker;
+    });
     expect(pool.size).toBe(MAX_ANALYSIS_WORKERS);
+    expect(workers).toHaveLength(1);
     pool.dispose();
+    expect(workers[0].terminated).toBe(true);
   });
 
   it("runs independent jobs concurrently and dispatches queued work in order", async () => {

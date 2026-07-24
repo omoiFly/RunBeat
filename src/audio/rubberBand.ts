@@ -1,3 +1,6 @@
+import rubberBandModuleUrl from "../assets/wasm/rubberband.js?url";
+import rubberBandWasmUrl from "../assets/wasm/rubberband.wasm?url";
+
 interface RubberBandModule {
   HEAPF32: Float32Array;
   _malloc(bytes: number): number;
@@ -15,9 +18,12 @@ let modulePromise: Promise<RubberBandModule> | undefined;
 
 async function loadModule(): Promise<RubberBandModule> {
   if (!modulePromise) {
-    const base = new URL("/wasm/", self.location.origin).href;
-    modulePromise = import(/* @vite-ignore */ `${base}rubberband.js`).then(
-      (entry: { default: RubberBandFactory }) => entry.default({ locateFile: (path) => `${base}${path}` })
+    modulePromise = import(/* @vite-ignore */ rubberBandModuleUrl).then(
+      (entry: { default: RubberBandFactory }) => entry.default({
+        locateFile: (path) => path.endsWith(".wasm")
+          ? rubberBandWasmUrl
+          : new URL(path, rubberBandModuleUrl).href
+      })
     );
   }
   return modulePromise;

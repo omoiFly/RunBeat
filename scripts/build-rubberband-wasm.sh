@@ -3,7 +3,7 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${RUBBERBAND_SOURCE_DIR:-${project_root}/vendor/rubberband}"
-output_dir="${project_root}/public/wasm"
+output_dir="${project_root}/src/assets/wasm"
 
 if command -v em++ >/dev/null 2>&1; then
   emxx_binary="$(command -v em++)"

@@ -6,7 +6,6 @@ import type { ProjectV1, RenderProgress, Track } from "../domain/types";
 import type { AppLanguage } from "../i18n";
 import { decodeFile } from "./audio";
 import { getCustomBeatSample } from "./customBeat";
-import { encodeMp3 } from "./ffmpeg";
 import { getRegisteredFile } from "./files";
 import { createRenderWorkerPool, prepareTrackClip, type AudioStretcher } from "./renderAudio";
 import { maximumInMemoryRenderBytes, recommendedRenderConcurrency } from "./clientPerformance";
@@ -42,6 +41,7 @@ async function encodeOutput(
     onProgress?.(1);
     return wav;
   }
+  const { encodeMp3 } = await import("./ffmpeg");
   return encodeMp3(wav, {
     bitrateKbps: project.exportSettings.mp3BitrateKbps ?? 192,
     signal,

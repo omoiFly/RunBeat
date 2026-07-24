@@ -1,21 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { AppCommand } from "../components/AppLayout";
 import { ClassicIcon } from "../components/ClassicIcon";
-import { ClassicMessageBox } from "../components/ClassicMessageBox";
-import { ConfirmDialog } from "../components/ConfirmDialog";
-import { ExportWizard } from "../components/studio/ExportWizard";
+import { LazyDialogFallback } from "../components/LazyDialogFallback";
 import { Inspector } from "../components/studio/Inspector";
 import { MatchTable } from "../components/studio/MatchTable";
-import { ProjectPropertiesDialog, type ProjectPropertiesDraft } from "../components/studio/ProjectPropertiesDialog";
-import { OpenProjectDialog, ProjectNameDialog } from "../components/studio/ProjectSessionDialogs";
-import { useExportRenderJob } from "../components/studio/useExportRenderJob";
+import type { ProjectPropertiesDraft } from "../components/studio/ProjectPropertiesDialog";
 import { DEFAULT_PROJECT_NAME, type ProjectV1, type Track } from "../domain/types";
 import { useI18n } from "../i18n";
 import { deleteProject as deleteStoredProject } from "../services/db";
-import { readProjectFile } from "../services/projectFile";
 import { sortTracks, type TrackSortDirection, type TrackSortKey } from "../services/trackSorting";
 import { useProjectStore } from "../store/projectStore";
+
+const ExportDialogController = lazy(() => import("../components/studio/ExportDialogController").then((module) => ({ default: module.ExportDialogController })));
+const ClassicMessageBox = lazy(() => import("../components/ClassicMessageBox").then((module) => ({ default: module.ClassicMessageBox })));
+const ConfirmDialog = lazy(() => import("../components/ConfirmDialog").then((module) => ({ default: module.ConfirmDialog })));
+const ProjectPropertiesDialog = lazy(() => import("../components/studio/ProjectPropertiesDialog").then((module) => ({ default: module.ProjectPropertiesDialog })));
+const OpenProjectDialog = lazy(() => import("../components/studio/ProjectSessionDialogs").then((module) => ({ default: module.OpenProjectDialog })));
+const ProjectNameDialog = lazy(() => import("../components/studio/ProjectSessionDialogs").then((module) => ({ default: module.ProjectNameDialog })));
 
 type GuardedAction = () => void | Promise<void>;
 type SaveDialogMode = "save" | "save-as";
@@ -114,8 +116,6 @@ export function StudioPage() {
     saveAs,
     discardChanges
   } = useProjectStore();
-  const { renderState, startRender, cancelRender } = useExportRenderJob(project, language);
-
   const projectParam = params.get("project") ?? undefined;
   const routeSession = projectParam ? `project:${projectParam}` : `new:${params.get("new") ?? "default"}`;
 
@@ -294,6 +294,10 @@ export function StudioPage() {
         exportProjectFile();
         break;
       case "export-audio":
+        if (project.exportSettings.format === "mp3") {
+          void import("../services/runtimePreload")
+            .then(({ prefetchFfmpegRuntime }) => prefetchFfmpegRuntime());
+        }
         setExportOpen(true);
         break;
       case "close-project":
@@ -342,6 +346,7 @@ export function StudioPage() {
     hasSavedRecord,
     moveSelection,
     navigate,
+    project.exportSettings.format,
     reanalyzeSelected,
     requestSave,
     resetExportSelection,
@@ -368,6 +373,7 @@ export function StudioPage() {
   const importProjectFile = async (file?: File) => {
     if (!file) return;
     try {
+      const { readProjectFile } = await import("../services/projectFile");
       const imported = await readProjectFile(file);
       runGuarded(() => {
         const importSession = `import-${Date.now()}`;
@@ -510,7 +516,8 @@ export function StudioPage() {
         />}
       </div>
 
-      <ConfirmDialog
+      {(deletePromptOpen || deleteProjectPromptOpen || unsavedPromptOpen || errorMessage != null) && <Suspense fallback={<LazyDialogFallback />}>
+      {deletePromptOpen && <ConfirmDialog
         open={deletePromptOpen}
         title={t("删除歌曲")}
         message={selectedIds.size === 1
@@ -519,9 +526,9 @@ export function StudioPage() {
         confirmLabel={t("删除(Y)")}
         onConfirm={confirmDelete}
         onCancel={() => setDeletePromptOpen(false)}
-      />
+      />}
 
-      <ConfirmDialog
+      {deleteProjectPromptOpen && <ConfirmDialog
         open={deleteProjectPromptOpen}
         title={t("删除项目")}
         message={t("要永久删除“{name}”吗？{detail}", {
@@ -531,9 +538,9 @@ export function StudioPage() {
         confirmLabel={t("删除(Y)")}
         onConfirm={() => void confirmProjectDelete()}
         onCancel={() => setDeleteProjectPromptOpen(false)}
-      />
+      />}
 
-      <ClassicMessageBox
+      {unsavedPromptOpen && <ClassicMessageBox
         open={unsavedPromptOpen}
         title="RunBeat"
         icon="warning"
@@ -544,7 +551,7 @@ export function StudioPage() {
           { value: "cancel", label: t("取消"), accessKey: "c" }
         ]}
         cancelValue="cancel"
-        onSelect={(value) => {
+        onSelect={(value: string) => {
           setUnsavedPromptOpen(false);
           if (value === "save") requestSave("save", true);
           else if (value === "discard") {
@@ -554,18 +561,19 @@ export function StudioPage() {
             pendingAction.current = undefined;
           }
         }}
-      />
+      />}
 
-      <ClassicMessageBox
+      {errorMessage != null && <ClassicMessageBox
         open={errorMessage != null}
         title="RunBeat"
         icon="error"
         message={translateMessage(errorMessage)}
         buttons={[{ value: "ok", label: t("确定"), default: true }]}
         onSelect={() => setErrorMessage(undefined)}
-      />
+      />}
+      </Suspense>}
 
-      {saveDialog && <ProjectNameDialog
+      {saveDialog && <Suspense fallback={<LazyDialogFallback />}><ProjectNameDialog
         open={saveDialog != null}
         title={saveDialog?.mode === "save-as" ? t("项目另存为") : t("保存项目")}
         initialName={nameDialogInitialValue}
@@ -582,31 +590,30 @@ export function StudioPage() {
           if (saveDialog?.continueAction) pendingAction.current = undefined;
           setSaveDialog(undefined);
         }}
-      />}
+      /></Suspense>}
 
-      {openProjectOpen && <OpenProjectDialog
+      {openProjectOpen && <Suspense fallback={<LazyDialogFallback />}><OpenProjectDialog
         open={openProjectOpen}
         currentProjectId={hasSavedRecord ? project.id : undefined}
         onOpen={chooseProject}
         onCancel={() => setOpenProjectOpen(false)}
-      />}
+      /></Suspense>}
 
-      {projectPropertiesOpen && <ProjectPropertiesDialog
+      {projectPropertiesOpen && <Suspense fallback={<LazyDialogFallback />}><ProjectPropertiesDialog
         open={projectPropertiesOpen}
         project={project}
         onApply={applyProjectProperties}
         onClose={() => setProjectPropertiesOpen(false)}
-      />}
+      /></Suspense>}
 
-      {exportOpen && <ExportWizard
-        open={exportOpen}
-        project={project}
-        renderState={renderState}
-        onSettings={(settings) => updateExportSettings(settings)}
-        onStart={(exportProject) => void startRender(exportProject)}
-        onCancelRender={cancelRender}
-        onClose={() => setExportOpen(false)}
-      />}
+      {exportOpen && <Suspense fallback={<LazyDialogFallback />}>
+        <ExportDialogController
+          project={project}
+          language={language}
+          onSettings={updateExportSettings}
+          onClose={() => setExportOpen(false)}
+        />
+      </Suspense>}
     </div>
   );
 }

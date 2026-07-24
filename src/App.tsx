@@ -10,17 +10,16 @@ const StudioPage = lazy(() => import("./pages/StudioPage").then((module) => ({ d
 
 export function App() {
   const { t } = useI18n();
+  const routeFallback = <div className="route-loading">{t("正在加载 RunBeat…")}</div>;
   return (
-    <Suspense fallback={<div className="route-loading">{t("正在加载 RunBeat…")}</div>}>
-      <Routes>
-        <Route element={<AppLayout />}>
-          <Route index element={<Navigate to="/studio" replace />} />
-          <Route path="studio" element={<StudioPage />} />
-          <Route path="projects" element={<ProjectsPage />} />
-          <Route path="guide" element={<GuidePage />} />
-          <Route path="about" element={<AboutPage />} />
-        </Route>
-      </Routes>
-    </Suspense>
+    <Routes>
+      <Route element={<AppLayout />}>
+        <Route index element={<Navigate to="/studio" replace />} />
+        <Route path="studio" element={<Suspense fallback={routeFallback}><StudioPage /></Suspense>} />
+        <Route path="projects" element={<Suspense fallback={routeFallback}><ProjectsPage /></Suspense>} />
+        <Route path="guide" element={<Suspense fallback={routeFallback}><GuidePage /></Suspense>} />
+        <Route path="about" element={<Suspense fallback={routeFallback}><AboutPage /></Suspense>} />
+      </Route>
+    </Routes>
   );
 }

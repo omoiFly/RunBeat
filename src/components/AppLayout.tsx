@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { DEFAULT_PROJECT_NAME } from "../domain/types";
 import { useI18n } from "../i18n";
 import { useProjectStore } from "../store/projectStore";
 import { ClassicIcon, type ClassicIconName } from "./ClassicIcon";
 import { CONTEXT_HELP } from "./contextHelp";
-import { AboutDialog, ContextHelpPopup, HelpTopicsDialog } from "./HelpSystem";
+import { LazyDialogFallback } from "./LazyDialogFallback";
+
+const HelpTopicsDialog = lazy(() => import("./HelpSystem").then((module) => ({ default: module.HelpTopicsDialog })));
+const AboutDialog = lazy(() => import("./HelpSystem").then((module) => ({ default: module.AboutDialog })));
+const ContextHelpPopup = lazy(() => import("./HelpSystem").then((module) => ({ default: module.ContextHelpPopup })));
 
 const MENU_ORDER = ["file", "edit", "view", "project", "help"] as const;
 type MenuName = (typeof MENU_ORDER)[number];
@@ -561,15 +565,21 @@ export function AppLayout() {
         </div>}
       </section>
 
-      <HelpTopicsDialog open={helpOpen || location.pathname === "/guide"} onClose={() => {
-        setHelpOpen(false);
-        if (location.pathname === "/guide") navigate("/studio", { replace: true });
-      }} />
-      <AboutDialog open={aboutOpen || location.pathname === "/about"} onClose={() => {
-        setAboutOpen(false);
-        if (location.pathname === "/about") navigate("/studio", { replace: true });
-      }} />
-      {helpPopup && <ContextHelpPopup {...helpPopup} onClose={() => setHelpPopup(undefined)} />}
+      {(helpOpen || location.pathname === "/guide") && <Suspense fallback={<LazyDialogFallback />}>
+        <HelpTopicsDialog open onClose={() => {
+          setHelpOpen(false);
+          if (location.pathname === "/guide") navigate("/studio", { replace: true });
+        }} />
+      </Suspense>}
+      {(aboutOpen || location.pathname === "/about") && <Suspense fallback={<LazyDialogFallback />}>
+        <AboutDialog open onClose={() => {
+          setAboutOpen(false);
+          if (location.pathname === "/about") navigate("/studio", { replace: true });
+        }} />
+      </Suspense>}
+      {helpPopup && <Suspense fallback={null}>
+        <ContextHelpPopup {...helpPopup} onClose={() => setHelpPopup(undefined)} />
+      </Suspense>}
     </div>
   );
 }

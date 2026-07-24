@@ -1,5 +1,4 @@
 import { sanitizeFlacForWebAudio } from "./flac";
-import { decodeAudioToWav } from "./ffmpeg";
 
 export interface DecodedAudio {
   channels: Float32Array[];
@@ -39,6 +38,7 @@ export async function decodeFile(file: File, options: DecodeFileOptions = {}): P
   } catch (nativeError) {
     if (!prepared.isFlac) throw nativeError;
     try {
+      const { decodeAudioToWav } = await import("./ffmpeg");
       const wav = await decodeAudioToWav(file, {
         channels: options.createChannels === false ? 1 : 2,
         sampleRate: 44_100
