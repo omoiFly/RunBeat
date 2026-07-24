@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.deploy/
+coverage/
+.vite/
+*.log
+.DS_Store
+playwright-report/
+test-results/
+blob-report/
+*.tsbuildinfo
+mp3/
+music/
+vendor/rubberband/
+vite.config.js
+vite.config.d.ts

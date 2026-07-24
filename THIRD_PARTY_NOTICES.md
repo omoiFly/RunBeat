@@ -1,0 +1,11 @@
+# Third-party notices
+
+- Essentia.js — AGPL-3.0, Music Technology Group, Universitat Pompeu Fabra.
+- Rubber Band Library v4.0.0 — GPL-2.0-or-later, Particular Programs Ltd / Breakfast Quay. The exact WASM build adapter and reproducible build command are included under `wasm/` and `scripts/`.
+- @ffmpeg/ffmpeg v0.12.15 — MIT, ffmpeg.wasm contributors.
+- @ffmpeg/core v0.12.10 — GPL-2.0-or-later, ffmpeg.wasm and FFmpeg contributors. The bundled single-threaded WebAssembly core includes FFmpeg n5.1.4 and libmp3lame; corresponding source and reproducible build scripts are published by the [ffmpeg.wasm project](https://github.com/ffmpegwasm/ffmpeg.wasm/tree/v0.12.10).
+- 98.css v0.1.21 — MIT, Jordan Scales and contributors.
+- WenQuanYi Bitmap Song v1.0.0-RC1, 14px TTF conversion — GPL-2.0 with font embedding exception, WenQuanYi Project contributors and AmusementClub. The font, license, authors, original 14×14 PCF source and conversion instructions are included under `public/fonts/wenquanyi-bitmap-song/`.
+- React, Vite, Zustand, Dexie, Radix UI and other JavaScript dependencies retain their respective licenses.
+
+Exact dependency versions and transitive license information are recorded by `package-lock.json`.
