@@ -25,6 +25,8 @@ export interface RenderResult {
 export interface RenderOptions {
   signal?: AbortSignal;
   language?: AppLanguage;
+  /** Optional, per-export cover image. Only continuous exports use it. */
+  coverImage?: File;
 }
 
 function outputFormat(project: ProjectV1): "mp3" | "wav" {
@@ -354,21 +356,42 @@ export async function renderProject(
     mixed.length = 0;
   }
 
-  const format = outputFormat(project);
+  const coverImage = options.coverImage;
+  const format = coverImage ? "mp4" : outputFormat(project);
   const encodeStart = useChunkedPipeline ? 0.84 : 0.94;
-  onProgress({ jobId, stage: "encode", progress: encodeStart, message: format === "mp3" ? "加载 FFmpeg 并编码 MP3" : "完成 WAV 文件" });
-  const audio = await encodeOutput(wav, project, signal, (encodingProgress) => {
-    onProgress({
-      jobId,
-      stage: "encode",
-      progress: encodeStart + (0.99 - encodeStart) * encodingProgress,
-      message: format === "mp3" ? `编码 MP3（${project.exportSettings.mp3BitrateKbps ?? 192} kbps）` : "编码 WAV"
-    });
+  onProgress({
+    jobId,
+    stage: "encode",
+    progress: encodeStart,
+    message: coverImage
+      ? "加载 FFmpeg 并生成 MP4 封面视频"
+      : format === "mp3" ? "加载 FFmpeg 并编码 MP3" : "完成 WAV 文件"
   });
+  const media = coverImage
+    ? await import("./ffmpeg").then(({ encodeCoverVideo }) => encodeCoverVideo(wav, coverImage, {
+      audioBitrateKbps: project.exportSettings.mp3BitrateKbps ?? 192,
+      signal,
+      onProgress: (encodingProgress) => {
+        onProgress({
+          jobId,
+          stage: "encode",
+          progress: encodeStart + (0.99 - encodeStart) * encodingProgress,
+          message: `生成 MP4 封面视频（AAC ${project.exportSettings.mp3BitrateKbps ?? 192} kbps）`
+        });
+      }
+    }))
+    : await encodeOutput(wav, project, signal, (encodingProgress) => {
+      onProgress({
+        jobId,
+        stage: "encode",
+        progress: encodeStart + (0.99 - encodeStart) * encodingProgress,
+        message: format === "mp3" ? `编码 MP3（${project.exportSettings.mp3BitrateKbps ?? 192} kbps）` : "编码 WAV"
+      });
+    });
   const baseName = exportBaseName(project.name, project.targetSpm, durationSeconds);
   if (timeline && project.exportSettings.includeTimeline) {
-    onProgress({ jobId, stage: "encode", progress: 0.99, message: "流式打包音频与时间轴" });
-    const archive = await addTimelineArchive(audio, `${baseName}.${format}`, timeline, language, signal);
+    onProgress({ jobId, stage: "encode", progress: 0.99, message: coverImage ? "流式打包视频与时间轴" : "流式打包音频与时间轴" });
+    const archive = await addTimelineArchive(media, `${baseName}.${format}`, timeline, language, signal);
     onProgress({ jobId, stage: "qa", progress: 1, message: "完成" });
     return {
       blob: archive,
@@ -378,7 +401,7 @@ export async function renderProject(
     };
   }
   onProgress({ jobId, stage: "qa", progress: 1, message: "完成" });
-  return { blob: audio, fileName: `${baseName}.${format}`, durationSeconds, timeline };
+  return { blob: media, fileName: `${baseName}.${format}`, durationSeconds, timeline };
 }
 
 export function downloadBlob(blob: Blob, fileName: string): void {

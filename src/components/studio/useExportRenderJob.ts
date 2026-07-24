@@ -27,7 +27,7 @@ export function useExportRenderJob(project: ProjectV1, language: AppLanguage) {
     setRenderState(IDLE_RENDER_STATE);
   }, [project.id]);
 
-  const startRender = async (projectOverride?: ProjectV1) => {
+  const startRender = async (projectOverride?: ProjectV1, coverImage?: File) => {
     if (controller.current) return;
     const renderProjectSnapshot = projectOverride ?? project;
     const renderLanguage = language;
@@ -39,7 +39,7 @@ export function useExportRenderJob(project: ProjectV1, language: AppLanguage) {
     try {
       const result = await renderProject(renderProjectSnapshot, (progress) => {
         if (generation.current === currentGeneration) setRenderState({ status: "rendering", progress });
-      }, { signal: currentController.signal, language: renderLanguage });
+      }, { signal: currentController.signal, language: renderLanguage, coverImage });
       if (generation.current !== currentGeneration) return;
       downloadBlob(result.blob, result.fileName);
       setRenderState({

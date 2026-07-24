@@ -8,6 +8,7 @@ export const CONTEXT_HELP: Record<string, string> = {
   "beat-accent": "按固定步数播放更明显的重拍；选择“无重拍”可保持每一步相同。",
   "alternate-feet": "在左右声道之间交替播放脚步提示，帮助区分左右脚。",
   "export-mode": "连续模式生成一条完整跑步音乐，分别导出会生成独立歌曲；两种模式都可选择是否加入节拍轨。",
+  "export-cover-video": "连续模式可选择一张本地图片，将完整混音生成带静态封面的 MP4；图片不会上传或保存进项目。",
   "export-format": "MP3 文件较小；WAV 无损但体积较大。",
   "export-loudness": "响度标准化会让不同歌曲听起来更一致，但不能代替安全音量设置。",
   "track-list": "单击选择歌曲，Ctrl 或 Shift 可多选。双击试听带节拍轨的处理后歌曲，Delete 删除所选歌曲。单击列标题可排序；“变速”列按带正负号的百分比排序。右键单击列标题可隐藏或恢复数据列。",

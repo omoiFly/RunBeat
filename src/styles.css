@@ -3326,6 +3326,41 @@ button.pressed {
   grid-template-columns: 1fr;
 }
 
+.cover-video-options > p:first-of-type {
+  margin: 2px 0 14px;
+}
+
+.cover-video-options input[type="file"] {
+  min-height: 25px;
+}
+
+.cover-video-selection {
+  margin-top: 12px;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #fff;
+  box-shadow: inset -1px -1px #fff, inset 1px 1px grey, inset -2px -2px #dfdfdf, inset 2px 2px #0a0a0a;
+}
+
+.cover-video-selection span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.cover-video-selection button {
+  flex: 0 0 auto;
+}
+
+.wizard-note {
+  margin: 14px 0 0;
+  color: #444;
+}
+
 .wizard-summary {
   margin: 0;
   display: grid;

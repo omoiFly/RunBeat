@@ -75,12 +75,15 @@ export function prefetchRubberBandRuntime(
 /**
  * FFmpeg's core is much larger. Only offer it to the browser as a low-priority
  * prefetch on fast, non-metered connections; constrained connections keep the
- * existing on-demand path so analysis retains the available bandwidth.
+ * existing on-demand path so analysis retains the available bandwidth. Once a
+ * user explicitly selects a video cover, start it on slower links too, while
+ * still honoring Save-Data.
  */
 export function prefetchFfmpegRuntime(
-  profile: RuntimeNetworkProfile = currentNetworkProfile()
+  profile: RuntimeNetworkProfile = currentNetworkProfile(),
+  userRequested = false
 ): boolean {
-  if (!shouldPrefetchFfmpeg(profile)) return false;
+  if (profile.saveData || (!userRequested && !shouldPrefetchFfmpeg(profile))) return false;
   appendPrefetch(ffmpegCoreUrl, "script");
   appendPrefetch(ffmpegWasmUrl, "fetch", "application/wasm");
   return true;

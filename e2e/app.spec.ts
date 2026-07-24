@@ -30,6 +30,49 @@ function clickTrackWav(bpm = 176, seconds = 8, sampleRate = 44_100): Buffer {
   return buffer;
 }
 
+function coverPng(): Buffer {
+  return Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64"
+  );
+}
+
+function mp4TrackDimensions(bytes: Uint8Array): Array<{ width: number; height: number }> {
+  const dimensions: Array<{ width: number; height: number }> = [];
+  for (let typeOffset = 4; typeOffset + 4 <= bytes.length; typeOffset += 1) {
+    if (strFromU8(bytes.subarray(typeOffset, typeOffset + 4)) !== "tkhd") continue;
+    const boxOffset = typeOffset - 4;
+    const boxSize = (
+      bytes[boxOffset] * 0x1000000
+      + bytes[boxOffset + 1] * 0x10000
+      + bytes[boxOffset + 2] * 0x100
+      + bytes[boxOffset + 3]
+    );
+    const boxEnd = boxOffset + boxSize;
+    if (boxSize < 16 || boxEnd > bytes.length) continue;
+    const readFixed16 = (offset: number) => (
+      bytes[offset] * 0x1000000
+      + bytes[offset + 1] * 0x10000
+      + bytes[offset + 2] * 0x100
+      + bytes[offset + 3]
+    ) / 0x10000;
+    dimensions.push({
+      width: readFixed16(boxEnd - 8),
+      height: readFixed16(boxEnd - 4)
+    });
+  }
+  return dimensions;
+}
+
+function mp4HandlerTypes(bytes: Uint8Array): string[] {
+  const handlers: string[] = [];
+  for (let typeOffset = 4; typeOffset + 16 <= bytes.length; typeOffset += 1) {
+    if (strFromU8(bytes.subarray(typeOffset, typeOffset + 4)) !== "hdlr") continue;
+    handlers.push(strFromU8(bytes.subarray(typeOffset + 12, typeOffset + 16)));
+  }
+  return handlers;
+}
+
 async function waitForStudio(page: Page): Promise<void> {
   await page.goto("/");
   await expect(page).toHaveURL(/\/studio$/);
@@ -308,7 +351,7 @@ test("track projects are automatically named, saved, and restored after refresh"
   await expect(page.getByText("部分歌曲需要重新关联原始文件。")).toBeVisible();
 });
 
-test("detailed track list analyzes locally and exports a localized timeline", async ({ page }) => {
+test("detailed track list analyzes locally and exports a localized timeline with cover video", async ({ page }) => {
   const browserErrors: string[] = [];
   const requestedResources: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
@@ -325,9 +368,9 @@ test("detailed track list analyzes locally and exports a localized timeline", as
   await expect(grid.getByText("click-176.wav")).toBeVisible();
   await expect(grid.getByText("分析完成")).toBeVisible({ timeout: 80_000 });
   expect(requestedResources.some((name) => name.includes("analysis.worker"))).toBe(true);
-  expect(requestedResources.some((name) => name.includes("essentia-wasm.es"))).toBe(true);
-  await expect.poll(() => requestedResources.some((name) => name.includes("rubberband-") && name.endsWith(".wasm"))).toBe(true);
-  await expect.poll(() => requestedResources.some((name) => name.includes("ffmpeg-core-") && name.endsWith(".wasm"))).toBe(true);
+  await expect.poll(() => requestedResources.some((name) => name.includes("essentia-wasm"))).toBe(true);
+  await expect.poll(() => requestedResources.some((name) => name.includes("rubberband") && name.includes(".wasm"))).toBe(true);
+  await expect.poll(() => requestedResources.some((name) => name.includes("ffmpeg-core") && name.includes(".wasm"))).toBe(true);
   await expect(grid.getByRole("columnheader")).toHaveCount(10);
   await expect(grid.getByRole("columnheader", { name: "原始 BPM" })).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "拍点" })).toBeVisible();
@@ -358,10 +401,19 @@ test("detailed track list analyzes locally and exports a localized timeline", as
   const wizard = page.getByRole("dialog", { name: "Export Audio Wizard" });
   await expect(wizard).toBeVisible();
   await wizard.getByRole("button", { name: /Next/ }).click();
-  await wizard.getByLabel("Format:").selectOption("wav");
+  await expect(wizard.getByRole("group", { name: "Cover Video (Optional)" })).toBeVisible();
+  await wizard.getByLabel("Cover image:").setInputFiles({
+    name: "morning-cover.png",
+    mimeType: "image/png",
+    buffer: coverPng()
+  });
+  await wizard.getByRole("button", { name: /Next/ }).click();
+  await expect(wizard.getByRole("group", { name: "Video Format" })).toContainText("H.264");
+  await wizard.getByLabel("Audio bit rate:").selectOption("128");
   await expect(wizard.getByLabel("Also export TXT / CSV timeline")).toBeChecked();
   await wizard.getByRole("button", { name: /Next/ }).click();
-  await expect(wizard.getByRole("group", { name: "Export Summary" })).toContainText("1");
+  await expect(wizard.getByRole("group", { name: "Export Summary" })).toContainText("MP4, H.264 + AAC, 128 kbps");
+  await expect(wizard.getByRole("group", { name: "Export Summary" })).toContainText("morning-cover.png");
 
   const downloadPromise = page.waitForEvent("download", { timeout: 80_000 });
   await wizard.getByRole("button", { name: "Finish" }).click();
@@ -371,15 +423,16 @@ test("detailed track list analyzes locally and exports a localized timeline", as
   expect(path).not.toBeNull();
   const files = unzipSync(await readFile(path!));
   const names = Object.keys(files);
-  const wavName = names.find((name) => name.endsWith(".wav"));
+  const mp4Name = names.find((name) => name.endsWith(".mp4"));
   const textName = names.find((name) => name.endsWith("_timeline.txt"));
   const csvName = names.find((name) => name.endsWith("_timeline.csv"));
-  expect(wavName).toBeDefined();
+  expect(mp4Name).toBeDefined();
   expect(textName).toBeDefined();
   expect(csvName).toBeDefined();
-  const wav = files[wavName!];
-  expect(strFromU8(wav.subarray(0, 4))).toBe("RIFF");
-  expect(strFromU8(wav.subarray(8, 12))).toBe("WAVE");
+  const mp4 = files[mp4Name!];
+  expect(strFromU8(mp4.subarray(4, 8))).toBe("ftyp");
+  expect(mp4TrackDimensions(mp4)).toContainEqual({ width: 1920, height: 1080 });
+  expect(mp4HandlerTypes(mp4)).toEqual(expect.arrayContaining(["vide", "soun"]));
   const text = strFromU8(files[textName!]);
   const csv = strFromU8(files[csvName!]);
   expect(text).toContain("Total duration");

@@ -2,7 +2,7 @@
   <img src="./public/favicon-192x192.png" width="120" height="120" alt="RunBeat logo">
   <h1>RunBeat</h1>
   <p><strong>在浏览器中，把自己的音乐制作成固定步频的跑步混音。</strong></p>
-  <p>Local-first running music builder with beat analysis, pitch-preserving time stretch and MP3/WAV export.</p>
+  <p>Local-first running music builder with beat analysis, pitch-preserving time stretch and MP3/WAV/cover-video export.</p>
 
   <p>
     <a href="./package.json"><img src="https://img.shields.io/badge/version-0.1.0-008080" alt="Version 0.1.0"></a>
@@ -32,7 +32,7 @@ RunBeat 是一款本地优先的跑步音乐制作工具。导入歌曲并设置
 - **节拍与相位校准**：自动对齐固定节拍网格，也可手动设置 BPM、首拍、相位和裁剪范围。
 - **可控歌曲编排**：选择、排序和试听歌曲；变速筛选与评级对减速更严格，并允许最高 `+30%` 的加速处于可接受范围；变速列按带符号的百分比排序。
 - **全局节拍轨**：内置多种节拍音色，支持重拍、左右声道交替和自定义单次鼓点。
-- **完整导出链路**：连续或分曲导出 MP3 / WAV，可选择是否混入节拍轨。
+- **完整导出链路**：连续或分曲导出 MP3 / WAV，可选择是否混入节拍轨；连续模式还可用本地图片生成静态封面 MP4。
 - **响度与时间轴**：支持响度标准化、真峰值保护，以及连续混音的 TXT / CSV 时间轴。
 - **本地项目管理**：加入歌曲后自动命名并持续保存到浏览器 IndexedDB，也可导入或备份为 `.runbeat.json`。
 - **双语经典界面**：提供简体中文和 English 界面，并采用 Windows 98 风格的桌面工作流。
@@ -48,7 +48,7 @@ RunBeat 是一款本地优先的跑步音乐制作工具。导入歌曲并设置
   → 相位与裁剪校准
   → 排序、交叉淡化与节拍轨混合
   → 响度标准化与真峰值保护
-  → MP3 / WAV / 时间轴
+  → MP3 / WAV / 静态封面 MP4 / 时间轴
 ```
 
 目标步频支持 `60–230 SPM`，覆盖快走到高步频跑步，也是整条时间线的主时钟。例如，一首约 `88 BPM` 的歌曲可以通过
@@ -92,6 +92,7 @@ npm run preview
 | 导入 | MP3、WAV、FLAC、M4A、AAC、OGG；实际解码能力取决于浏览器，FLAC 提供 FFmpeg 后备解码 |
 | 导出 | MP3：128 / 192 / 256 / 320 kbps |
 | 导出 | WAV：44.1 kHz、16-bit、立体声 |
+| 导出 | MP4：连续模式、本地 JPG / PNG / WebP 封面、1920×1080 H.264 + AAC |
 
 连续模式可以生成一条完整混音；分别导出模式会逐首生成处理后的歌曲。连续导出
 还可附带易读的 TXT 时间轴和包含精确毫秒、BPM、变速与质量信息的 CSV；两种
@@ -112,7 +113,7 @@ npm run preview
 | React + TypeScript + Vite | 应用界面与构建 |
 | Essentia.js | BPM、节拍和音频特征分析 |
 | Rubber Band WASM | 保持音高的 time-stretch |
-| FFmpeg / ffmpeg.wasm | 后备音频解码与 MP3 编码 |
+| FFmpeg / ffmpeg.wasm | 后备音频解码、MP3 编码与静态封面 MP4 合成 |
 | Web Workers | 并行分析与渲染，避免阻塞界面 |
 | Zustand + Dexie.js | 应用状态与 IndexedDB 项目存储 |
 | fflate | 连续导出的流式 ZIP 打包 |

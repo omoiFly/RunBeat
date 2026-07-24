@@ -27,6 +27,12 @@ describe("runtime asset prefetch policy", () => {
     expect(shouldPrefetchFfmpeg({ saveData: true, effectiveType: "4g", downlinkMbps: 10 })).toBe(false);
   });
 
+  it("starts FFmpeg early after an explicit video request while respecting Save-Data", () => {
+    expect(prefetchFfmpegRuntime({ effectiveType: "3g", downlinkMbps: 3 }, true)).toBe(true);
+    runtimeLinks().forEach((link) => link.remove());
+    expect(prefetchFfmpegRuntime({ saveData: true, effectiveType: "4g", downlinkMbps: 10 }, true)).toBe(false);
+  });
+
   it("adds low-priority, de-duplicated runtime links", () => {
     expect(prefetchRubberBandRuntime({ effectiveType: "4g", downlinkMbps: 10 })).toBe(true);
     expect(prefetchRubberBandRuntime({ effectiveType: "4g", downlinkMbps: 10 })).toBe(true);

@@ -1,7 +1,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { ExportSettings, ProjectV1 } from "../../domain/types";
 import { useI18n } from "../../i18n";
+import { COVER_IMAGE_ACCEPT, coverImageValidationError } from "../../services/coverVideo";
 import { resolveExportEnabled } from "../../services/exportSelection";
 import { isTrackIncluded } from "../../services/render";
 import { estimateProjectDuration } from "../../services/renderEstimate";
@@ -9,13 +10,14 @@ import { formatTimelineTimestamp } from "../../services/timeline";
 import { ClassicIcon } from "../ClassicIcon";
 import type { ExportRenderState } from "./useExportRenderJob";
 
-type WizardPage = 0 | 1 | 2;
+type WizardStep = "content" | "cover" | "format" | "summary";
 
-const PAGE_TITLES = [
-  "选择要导出的内容",
-  "选择音频格式和响度",
-  "完成导出设置"
-] as const;
+const PAGE_TITLES: Record<WizardStep, string> = {
+  content: "选择要导出的内容",
+  cover: "选择可选的封面视频",
+  format: "选择格式和响度",
+  summary: "完成导出设置"
+};
 
 function exportContentLabel(settings: ExportSettings): string {
   if (settings.mode === "continuous") {
@@ -37,14 +39,23 @@ export function ExportWizard({
   project: ProjectV1;
   renderState: ExportRenderState;
   onSettings: (settings: ExportSettings) => void;
-  onStart: (project: ProjectV1) => void;
+  onStart: (project: ProjectV1, coverImage?: File) => void;
   onCancelRender: () => void;
   onClose: () => void;
 }) {
   const { t, translateMessage } = useI18n();
-  const [page, setPage] = useState<WizardPage>(0);
+  const [stepIndex, setStepIndex] = useState(0);
   const [settings, setSettings] = useState<ExportSettings>(project.exportSettings);
+  const [coverImage, setCoverImage] = useState<File>();
+  const [coverError, setCoverError] = useState<string>();
   const [started, setStarted] = useState(false);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const steps = useMemo<WizardStep[]>(() => (
+    settings.mode === "continuous"
+      ? ["content", "cover", "format", "summary"]
+      : ["content", "format", "summary"]
+  ), [settings.mode]);
+  const step = steps[Math.min(stepIndex, steps.length - 1)];
   const exportProject = useMemo<ProjectV1>(() => ({ ...project, exportSettings: settings }), [project, settings]);
   const selectedTracks = exportProject.tracks.filter((track) => resolveExportEnabled(track, exportProject.maxTempoChangePercent));
   const readyTracks = selectedTracks.filter((track) => isTrackIncluded(track, exportProject));
@@ -52,11 +63,34 @@ export function ExportWizard({
   const estimatedDuration = estimateProjectDuration(exportProject);
   const rendering = renderState.status === "rendering";
   const progress = renderState.progress?.progress ?? 0;
+  const videoCover = settings.mode === "continuous" ? coverImage : undefined;
 
   const finish = () => {
     onSettings(settings);
     setStarted(true);
-    onStart(exportProject);
+    onStart(exportProject, videoCover);
+  };
+
+  const selectCoverImage = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    const error = coverImageValidationError(file);
+    setCoverError(error);
+    if (error) {
+      setCoverImage(undefined);
+      event.currentTarget.value = "";
+      return;
+    }
+    setCoverImage(file);
+    void import("../../services/runtimePreload").then(({ prefetchFfmpegRuntime }) => {
+      prefetchFfmpegRuntime(undefined, true);
+    });
+  };
+
+  const removeCoverImage = () => {
+    setCoverImage(undefined);
+    setCoverError(undefined);
+    if (coverInputRef.current) coverInputRef.current.value = "";
   };
 
   const close = () => {
@@ -82,13 +116,13 @@ export function ExportWizard({
           {!started && <>
             <header className="wizard-banner">
               <div>
-                <h2>{t(PAGE_TITLES[page])}</h2>
-                <p>{t("导出音频向导 - 第 {page} 页，共 3 页", { page: page + 1 })}</p>
+                <h2>{t(PAGE_TITLES[step])}</h2>
+                <p>{t("导出音频向导 - 第 {page} 页，共 {total} 页", { page: stepIndex + 1, total: steps.length })}</p>
               </div>
               <ClassicIcon name="export" size={32} />
             </header>
             <div className="wizard-page">
-              {page === 0 && <fieldset>
+              {step === "content" && <fieldset>
                 <legend>{t("导出内容")}</legend>
                 <div className="classic-radio-list" data-help="export-mode">
                   <div className="field-row"><input id="export-mode-continuous-beat" type="radio" name="export-mode" checked={settings.mode === "continuous" && settings.includeBeat} onChange={() => setSettings((current) => ({ ...current, mode: "continuous", includeBeat: true }))} /><label htmlFor="export-mode-continuous-beat">{t("连续跑步音乐（带节拍）")}</label></div>
@@ -98,25 +132,60 @@ export function ExportWizard({
                 </div>
               </fieldset>}
 
-              {page === 1 && <>
+              {step === "cover" && <fieldset className="cover-video-options" data-help="export-cover-video">
+                <legend>{t("封面视频（可选）")}</legend>
+                <p>{t("选择一张图片后，合并音频会导出为带静态封面的 MP4；不选择则继续导出普通音频。")}</p>
+                <div className="classic-form-grid">
+                  <label htmlFor="export-wizard-cover">{t("封面图片:")}</label>
+                  <input
+                    ref={coverInputRef}
+                    id="export-wizard-cover"
+                    type="file"
+                    accept={COVER_IMAGE_ACCEPT}
+                    onChange={selectCoverImage}
+                  />
+                </div>
+                {coverImage && <div className="cover-video-selection">
+                  <span><strong>{coverImage.name}</strong> · {(coverImage.size / 1024 / 1024).toFixed(1)} MB</span>
+                  <button type="button" onClick={removeCoverImage}>{t("移除图片")}</button>
+                </div>}
+                {coverError && <p className="wizard-error"><ClassicIcon name="warning" />{t(coverError)}</p>}
+                <p className="wizard-note">{t("支持 JPG、PNG、WebP，最大 20 MB。图片只在本机处理，不会上传；视频为 1920×1080，图片会等比缩放并留黑边。")}</p>
+              </fieldset>}
+
+              {step === "format" && <>
                 <fieldset>
-                  <legend>{t("音频格式")}</legend>
-                  <div className="classic-form-grid">
-                    <label htmlFor="export-wizard-format">{t("格式:")}</label>
-                    <select id="export-wizard-format" data-help="export-format" value={settings.format} onChange={(event) => setSettings((current) => ({ ...current, format: event.target.value as ExportSettings["format"] }))}>
-                      <option value="mp3">MP3</option>
-                      <option value="wav">WAV</option>
-                    </select>
-                    {settings.format === "mp3" && <>
-                      <label htmlFor="export-wizard-bitrate">{t("码率:")}</label>
+                  <legend>{t(videoCover ? "视频格式" : "音频格式")}</legend>
+                  {videoCover
+                    ? <div className="classic-form-grid">
+                      <span>{t("格式:")}</span>
+                      <span>MP4 · H.264 · 1920×1080</span>
+                      <label htmlFor="export-wizard-bitrate">{t("音频码率:")}</label>
                       <select id="export-wizard-bitrate" value={settings.mp3BitrateKbps} onChange={(event) => setSettings((current) => ({ ...current, mp3BitrateKbps: Number(event.target.value) as ExportSettings["mp3BitrateKbps"] }))}>
                         <option value={128}>128 kbps</option>
                         <option value={192}>192 kbps</option>
                         <option value={256}>256 kbps</option>
                         <option value={320}>320 kbps</option>
                       </select>
-                    </>}
-                  </div>
+                      <span>{t("音频编码:")}</span>
+                      <span>AAC</span>
+                    </div>
+                    : <div className="classic-form-grid">
+                      <label htmlFor="export-wizard-format">{t("格式:")}</label>
+                      <select id="export-wizard-format" data-help="export-format" value={settings.format} onChange={(event) => setSettings((current) => ({ ...current, format: event.target.value as ExportSettings["format"] }))}>
+                        <option value="mp3">MP3</option>
+                        <option value="wav">WAV</option>
+                      </select>
+                      {settings.format === "mp3" && <>
+                        <label htmlFor="export-wizard-bitrate">{t("码率:")}</label>
+                        <select id="export-wizard-bitrate" value={settings.mp3BitrateKbps} onChange={(event) => setSettings((current) => ({ ...current, mp3BitrateKbps: Number(event.target.value) as ExportSettings["mp3BitrateKbps"] }))}>
+                          <option value={128}>128 kbps</option>
+                          <option value={192}>192 kbps</option>
+                          <option value={256}>256 kbps</option>
+                          <option value={320}>320 kbps</option>
+                        </select>
+                      </>}
+                    </div>}
                 </fieldset>
                 <fieldset>
                   <legend>{t("响度")}</legend>
@@ -139,13 +208,16 @@ export function ExportWizard({
                 </fieldset>
               </>}
 
-              {page === 2 && <fieldset>
+              {step === "summary" && <fieldset>
                 <legend>{t("导出摘要")}</legend>
                 <dl className="wizard-summary">
                   <dt>{t("项目:")}</dt><dd>{project.name}</dd>
                   <dt>{t("内容:")}</dt><dd>{t(exportContentLabel(settings))}</dd>
                   <dt>{t("歌曲:")}</dt><dd>{t("{count} 首", { count: readyTracks.length })}</dd>
-                  <dt>{t("格式:")}</dt><dd>{settings.format === "mp3" ? `MP3, ${settings.mp3BitrateKbps} kbps` : "WAV, 16-bit"}</dd>
+                  <dt>{t("格式:")}</dt><dd>{videoCover
+                    ? `MP4, H.264 + AAC, ${settings.mp3BitrateKbps} kbps`
+                    : settings.format === "mp3" ? `MP3, ${settings.mp3BitrateKbps} kbps` : "WAV, 16-bit"}</dd>
+                  {videoCover && <><dt>{t("封面:")}</dt><dd>{videoCover.name}</dd></>}
                   <dt>{t("目标步频:")}</dt><dd>{project.targetSpm} SPM</dd>
                   <dt>{t("预计时长:")}</dt><dd>{formatTimelineTimestamp(estimatedDuration)}</dd>
                 </dl>
@@ -154,9 +226,9 @@ export function ExportWizard({
               </fieldset>}
             </div>
             <div className="wizard-command-row">
-              <button type="button" disabled={page === 0} onClick={() => setPage((page - 1) as WizardPage)}>{t("< 上一步")}</button>
-              {page < 2
-                ? <button className="default" type="button" onClick={() => setPage((page + 1) as WizardPage)}>{t("下一步 >")}</button>
+              <button type="button" disabled={stepIndex === 0} onClick={() => setStepIndex((current) => Math.max(0, current - 1))}>{t("< 上一步")}</button>
+              {stepIndex < steps.length - 1
+                ? <button className="default" type="button" onClick={() => setStepIndex((current) => Math.min(steps.length - 1, current + 1))}>{t("下一步 >")}</button>
                 : <button className="default" type="button" disabled={!canExport} onClick={finish}>{t("完成")}</button>}
               <span />
               <button type="button" onClick={onClose}>{t("取消")}</button>
@@ -166,7 +238,11 @@ export function ExportWizard({
           {started && <div className="export-progress-page">
             <div className="export-progress-icon"><ClassicIcon name={renderState.status === "completed" ? "check" : renderState.status === "failed" ? "error" : "export"} size={32} /></div>
             <div>
-              <h2>{renderState.status === "completed" ? t("导出完成") : renderState.status === "failed" ? t("无法完成导出") : t("正在导出音频")}</h2>
+              <h2>{renderState.status === "completed"
+                ? t("导出完成")
+                : renderState.status === "failed"
+                  ? t("无法完成导出")
+                  : t(videoCover ? "正在生成封面视频" : "正在导出音频")}</h2>
               <p>{renderState.status === "completed"
                 ? t("文件已开始下载。最终时长 {duration}。", { duration: formatTimelineTimestamp(renderState.completedDuration ?? estimatedDuration) })
                 : renderState.status === "failed"
@@ -182,7 +258,7 @@ export function ExportWizard({
           </div>}
 
           {started && <div className="wizard-command-row progress-commands">
-            {renderState.status === "failed" && <button type="button" onClick={() => onStart(exportProject)}>{t("重试")}</button>}
+            {renderState.status === "failed" && <button type="button" onClick={() => onStart(exportProject, videoCover)}>{t("重试")}</button>}
             <span />
             {rendering
               ? <button type="button" onClick={onCancelRender}>{t("取消")}</button>

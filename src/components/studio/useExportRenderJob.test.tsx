@@ -31,13 +31,14 @@ describe("useExportRenderJob", () => {
       initialProps: { currentProject: project, currentLanguage: "zh-CN" as AppLanguage }
     });
 
+    const coverImage = new File(["cover"], "cover.png", { type: "image/png" });
     let running!: Promise<void>;
-    act(() => { running = result.current.startRender(); });
+    act(() => { running = result.current.startRender(undefined, coverImage); });
     await waitFor(() => expect(result.current.renderState.progress?.progress).toBe(0.35));
     expect(renderProject).toHaveBeenCalledWith(
       project,
       expect.any(Function),
-      expect.objectContaining({ language: "zh-CN" })
+      expect.objectContaining({ language: "zh-CN", coverImage })
     );
 
     rerender({ currentProject: { ...project, name: "渲染期间修改标题" }, currentLanguage: "en" });

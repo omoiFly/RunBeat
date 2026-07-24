@@ -22,7 +22,7 @@ export function ExportDialogController({
       project={project}
       renderState={renderState}
       onSettings={onSettings}
-      onStart={(exportProject) => void startRender(exportProject)}
+      onStart={(exportProject, coverImage) => void startRender(exportProject, coverImage)}
       onCancelRender={cancelRender}
       onClose={onClose}
     />

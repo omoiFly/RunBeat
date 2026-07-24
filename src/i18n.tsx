@@ -190,6 +190,8 @@ const HELP_ENGLISH: Record<string, string> = {
     "Press Ctrl+E to open the Export Wizard. Continuous mode creates one mix in list order; separate mode creates one file for each selected track.",
   "MP3 文件较小；WAV 为未压缩音频，体积更大。":
     "MP3 files are smaller; WAV is uncompressed and larger.",
+  "连续模式可以选择 JPG、PNG 或 WebP 封面，在本机生成 1920×1080 的 H.264 / AAC MP4；不选择图片时仍按普通音频导出。封面图片不会保存到项目或上传。":
+    "Continuous mode can use a JPG, PNG, or WebP cover to create a 1920×1080 H.264/AAC MP4 locally. Without an image, it exports regular audio. The cover is not saved in the project or uploaded.",
   "“加入节拍轨”决定最终音频是否混入脚步提示，不影响歌曲的变速处理。":
     "Include Beat Track controls whether footstep cues are mixed into the final audio; it does not affect tempo processing.",
   "响度标准化用于缩小歌曲之间的音量差异，真峰值保护用于减少削波风险。":
@@ -480,17 +482,31 @@ const ENGLISH: Record<string, string> = {
 
   "导出音频向导": "Export Audio Wizard",
   "选择要导出的内容": "Choose What to Export",
-  "选择音频格式和响度": "Choose Audio Format and Loudness",
+  "选择可选的封面视频": "Choose an Optional Cover Video",
+  "选择格式和响度": "Choose Format and Loudness",
   "完成导出设置": "Complete Export Settings",
-  "导出音频向导 - 第 {page} 页，共 3 页": "Export Audio Wizard - Page {page} of 3",
+  "导出音频向导 - 第 {page} 页，共 {total} 页": "Export Audio Wizard - Page {page} of {total}",
   "导出内容": "Export Content",
   "连续跑步音乐（带节拍）": "Continuous Mix (With Beat)",
   "连续跑步音乐（不带节拍）": "Continuous Mix (No Beat)",
   "分别导出处理后的歌曲（带节拍）": "Separate Tracks (With Beat)",
   "分别导出处理后的歌曲（不带节拍）": "Separate Tracks (No Beat)",
+  "封面视频（可选）": "Cover Video (Optional)",
+  "选择一张图片后，合并音频会导出为带静态封面的 MP4；不选择则继续导出普通音频。":
+    "Choose an image to export the continuous mix as an MP4 with a still cover. Leave it empty to export regular audio.",
+  "封面图片:": "Cover image:",
+  "移除图片": "Remove Image",
+  "支持 JPG、PNG、WebP，最大 20 MB。图片只在本机处理，不会上传；视频为 1920×1080，图片会等比缩放并留黑边。":
+    "Supports JPG, PNG, and WebP up to 20 MB. The image is processed locally and never uploaded. Video is 1920×1080; the image is fitted with black bars.",
+  "请选择有效的封面图片。": "Choose a valid cover image.",
+  "封面图片不能超过 20 MB。": "The cover image must not exceed 20 MB.",
+  "请选择 JPG、PNG 或 WebP 图片。": "Choose a JPG, PNG, or WebP image.",
   "音频格式": "Audio Format",
+  "视频格式": "Video Format",
   "格式:": "Format:",
   "码率:": "Bit rate:",
+  "音频码率:": "Audio bit rate:",
+  "音频编码:": "Audio codec:",
   "响度": "Loudness",
   "目标:": "Target:",
   "响度标准化": "Normalize loudness",
@@ -499,6 +515,7 @@ const ENGLISH: Record<string, string> = {
   "项目:": "Project:",
   "内容:": "Content:",
   "歌曲:": "Tracks:",
+  "封面:": "Cover:",
   "预计时长:": "Estimated duration:",
   "{count} 首": "{count}",
   "没有可导出的歌曲。请取消向导并在歌曲列表中勾选至少一首分析完成的歌曲。":
@@ -510,6 +527,9 @@ const ENGLISH: Record<string, string> = {
   "导出完成": "Export Complete",
   "无法完成导出": "Export Could Not Be Completed",
   "正在导出音频": "Exporting Audio",
+  "正在生成封面视频": "Creating Cover Video",
+  "加载 FFmpeg 并生成 MP4 封面视频": "Loading FFmpeg and creating the MP4 cover video",
+  "流式打包视频与时间轴": "Streaming video and timelines into the archive",
   "文件已开始下载。最终时长 {duration}。": "The download has started. Final duration: {duration}.",
   "正在准备...": "Preparing...",
   "重试": "Retry",
@@ -553,6 +573,8 @@ const ENGLISH: Record<string, string> = {
     "Alternate the footstep cue between left and right channels to distinguish each foot.",
   "连续模式生成一条完整跑步音乐，分别导出会生成独立歌曲；两种模式都可选择是否加入节拍轨。":
     "Continuous export creates one complete mix; separate export creates one file per track. Either mode can include or omit the beat track.",
+  "连续模式可选择一张本地图片，将完整混音生成带静态封面的 MP4；图片不会上传或保存进项目。":
+    "Continuous export can use a local image to create an MP4 of the full mix with a still cover. The image is not uploaded or saved in the project.",
   "MP3 文件较小；WAV 无损但体积较大。": "MP3 files are smaller; WAV is lossless but larger.",
   "响度标准化会让不同歌曲听起来更一致，但不能代替安全音量设置。":
     "Loudness normalization makes tracks sound more consistent, but does not replace a safe listening volume.",
@@ -592,6 +614,13 @@ function translateRuntimeMessage(message: string, language: AppLanguage): string
     [/^没有找到这个本地项目，已创建新项目。$/, "The local project was not found. A new project was created."],
     [/^请先重新关联 (.+) 的原始文件，再重新分析。$/, "Relink the original file for $1 before reanalyzing."],
     [/^(.+) 已重新分析。$/, "$1 was reanalyzed."],
+    [/^生成 MP4 封面视频（AAC (\d+) kbps）$/, "Creating MP4 cover video (AAC $1 kbps)"],
+    [/^MP4 编码失败（FFmpeg 退出码 (\d+)）：(.+)$/, "MP4 encoding failed (FFmpeg exit code $1): $2"],
+    [/^MP4 编码失败（FFmpeg 退出码 (\d+)）$/, "MP4 encoding failed (FFmpeg exit code $1)"],
+    [/^不支持的视频音频码率：(\d+) kbps$/, "Unsupported video audio bit rate: $1 kbps"],
+    [/^FFmpeg 无法挂载封面或音频输入$/, "FFmpeg could not mount the cover image or audio input."],
+    [/^FFmpeg 未返回有效的 MP4 数据$/, "FFmpeg did not return valid MP4 data."],
+    [/^MP4 编码已取消$/, "MP4 encoding was canceled."],
     [/^自动保存失败：(.+)$/, "Autosave failed: $1"],
     [/^保存失败：(.+)$/, "Save failed: $1"]
   ];
