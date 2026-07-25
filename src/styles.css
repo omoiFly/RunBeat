@@ -3036,13 +3036,13 @@ button.pressed {
 
 .classic-form-grid {
   display: grid;
-  grid-template-columns: 96px minmax(0, 1fr);
+  grid-template-columns: 112px minmax(0, 1fr);
   align-items: center;
   gap: 7px 9px;
 }
 
 .classic-form-grid > label {
-  text-align: right;
+  text-align: left;
 }
 
 .classic-form-grid input,

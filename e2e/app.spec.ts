@@ -401,6 +401,15 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await page.getByRole("menu", { name: "help" }).getByRole("menuitem", { name: /语言\(L\)/ }).hover();
   await page.getByRole("menu", { name: "language" }).getByRole("menuitemradio", { name: "English", exact: true }).click();
 
+  const calibrationLabels = page.getByRole("group", { name: "Manual Calibration" }).locator(".classic-form-grid > label");
+  await expect(calibrationLabels).toHaveCount(3);
+  const calibrationLabelMetrics = await calibrationLabels.evaluateAll((labels) => labels.map((label) => ({
+    textAlign: getComputedStyle(label).textAlign,
+    height: label.getBoundingClientRect().height
+  })));
+  expect(calibrationLabelMetrics.map(({ textAlign }) => textAlign)).toEqual(["left", "left", "left"]);
+  expect(new Set(calibrationLabelMetrics.map(({ height }) => Math.round(height))).size).toBe(1);
+
   await page.keyboard.press("Control+e");
   const wizard = page.getByRole("dialog", { name: "Export Audio Wizard" });
   await expect(wizard).toBeVisible();
