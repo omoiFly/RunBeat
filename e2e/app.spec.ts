@@ -90,6 +90,12 @@ test("classic document shell uses property sheets and context help", async ({ pa
 
   const menuBar = page.getByRole("menubar", { name: "应用程序菜单" });
   await expect(menuBar.getByRole("menuitem")).toHaveCount(5);
+  const fileMenuButton = menuBar.getByRole("menuitem", { name: /文件\(F\)/ });
+  await fileMenuButton.hover();
+  await page.mouse.down();
+  expect(await fileMenuButton.evaluate((button) => getComputedStyle(button).textShadow)).toBe("none");
+  await page.mouse.up();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("toolbar", { name: "常用命令" }).getByRole("button")).toHaveCount(5);
   await expect(page.getByRole("navigation", { name: "制作工作区" })).toHaveCount(0);
   await expect(page.locator(".application-status")).toContainText("尚未保存");

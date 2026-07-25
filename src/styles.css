@@ -299,6 +299,11 @@ u {
   color: #222;
   background: transparent;
   box-shadow: none;
+  text-shadow: none;
+}
+
+.classic-menu-button:not(:disabled):active {
+  text-shadow: none;
 }
 
 .classic-menu-button:hover,
