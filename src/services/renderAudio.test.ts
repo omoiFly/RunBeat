@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Track } from "../domain/types";
-import { prepareTrackClip, previewSourceRange, previewStartBounds } from "./renderAudio";
+import { prepareTrackClip } from "./renderAudio";
 
 function makeTrack(): Track {
   return {
@@ -38,26 +38,7 @@ function makeTrack(): Track {
   };
 }
 
-describe("shared preview/export audio preparation", () => {
-  it("selects any requested preview start inside the edited source range", () => {
-    expect(previewStartBounds(makeTrack(), 60)).toEqual({ minSeconds: 10, maxSeconds: 30, previewDurationSeconds: 20 });
-    expect(previewSourceRange(makeTrack(), 60, 10)).toEqual({ startSeconds: 10, endSeconds: 30 });
-    expect(previewSourceRange(makeTrack(), 60, 17.5)).toEqual({ startSeconds: 17.5, endSeconds: 37.5 });
-    expect(previewSourceRange(makeTrack(), 60, 30)).toEqual({ startSeconds: 30, endSeconds: 50 });
-  });
-
-  it("centers by default and clamps the requested start to the available bounds", () => {
-    expect(previewStartBounds(makeTrack(), 32)).toEqual({ minSeconds: 10, maxSeconds: 12, previewDurationSeconds: 20 });
-    expect(previewSourceRange(makeTrack(), 32)).toEqual({ startSeconds: 11, endSeconds: 31 });
-    expect(previewSourceRange(makeTrack(), 32, -10)).toEqual({ startSeconds: 10, endSeconds: 30 });
-    expect(previewSourceRange(makeTrack(), 32, 99)).toEqual({ startSeconds: 12, endSeconds: 32 });
-  });
-
-  it("uses the whole range when the edited clip is shorter than the preview", () => {
-    expect(previewStartBounds(makeTrack(), 18)).toEqual({ minSeconds: 10, maxSeconds: 10, previewDurationSeconds: 8 });
-    expect(previewSourceRange(makeTrack(), 18, 15)).toEqual({ startSeconds: 10, endSeconds: 18 });
-  });
-
+describe("export audio preparation", () => {
   it("uses exact clipped frames, the requested ratio and trim-adjusted phase", async () => {
     const left = Float32Array.from({ length: 50 }, (_, index) => index);
     const right = Float32Array.from({ length: 50 }, (_, index) => -index);

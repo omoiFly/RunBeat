@@ -77,6 +77,13 @@ function addCustomBeat(
 }
 
 const customSampleCache = new WeakMap<BeatSample, Map<number, [Float32Array, Float32Array]>>();
+const BUILT_IN_PROFILES = {
+  "soft-footstep": [95, 0.55],
+  "track-footstep": [125, 0.7],
+  kick: [72, 0.05],
+  wood: [480, 0.22],
+  click: [1250, 0.02]
+} as const;
 
 function resampledCustomBeat(sample: BeatSample, sampleRate: number): [Float32Array, Float32Array] {
   let rates = customSampleCache.get(sample);
@@ -118,13 +125,7 @@ function generateBeatTrackRangeFromOrigin(
     }
     custom = resampledCustomBeat(customSample, sampleRate);
   }
-  const profile = settings.sound === "custom" ? undefined : {
-    "soft-footstep": [95, 0.55],
-    "track-footstep": [125, 0.7],
-    kick: [72, 0.05],
-    wood: [480, 0.22],
-    click: [1250, 0.02]
-  }[settings.sound];
+  const profile = settings.sound === "custom" ? undefined : BUILT_IN_PROFILES[settings.sound];
 
   for (let beat = firstBeat; ; beat += 1) {
     const hitStart = gridOriginFrames + Math.round(beat * framesPerBeat);
@@ -139,6 +140,48 @@ function generateBeatTrackRangeFromOrigin(
     }
   }
   return [left, right];
+}
+
+/** Generates one grid hit while preserving the absolute beat index for accents and alternating feet. */
+export function generateBeatHit(
+  beat: number,
+  sampleRate: number,
+  settings: BeatTrackSettings,
+  customSample?: BeatSample
+): [Float32Array, Float32Array] {
+  const hitFrames = settings.sound === "custom"
+    ? Math.min(
+        Math.round(sampleRate * 0.5),
+        customSample?.channels[0]?.length ?? Math.round(sampleRate * 0.5)
+      )
+    : Math.round(sampleRate * 0.075);
+  const target: [Float32Array, Float32Array] = [
+    new Float32Array(Math.max(1, hitFrames)),
+    new Float32Array(Math.max(1, hitFrames))
+  ];
+  const gain = dbToGain(settings.gainDb);
+  const accent = settings.accentEvery && beat % settings.accentEvery === 0 ? 1.35 : 1;
+  if (settings.sound === "custom") {
+    if (!customSample?.channels.length || !Number.isFinite(customSample.sampleRate) || customSample.sampleRate <= 0) {
+      throw new Error("自定义鼓点文件不可用，请在项目设置中重新上传");
+    }
+    addCustomBeat(
+      target,
+      0,
+      0,
+      resampledCustomBeat(customSample, sampleRate),
+      sampleRate,
+      gain * accent,
+      settings.alternateFeet,
+      beat
+    );
+  } else {
+    const profile = BUILT_IN_PROFILES[settings.sound];
+    const footVariation = settings.alternateFeet && beat % 2 ? 1.06 : 1;
+    addPulse(target[0], 0, 0, sampleRate, profile[0] * footVariation, gain * accent, profile[1], beat, 0);
+    addPulse(target[1], 0, 0, sampleRate, profile[0] / footVariation, gain * accent, profile[1], beat, 1);
+  }
+  return target;
 }
 
 /** Generates a slice of the absolute master beat grid without resetting accents or left/right feet. */

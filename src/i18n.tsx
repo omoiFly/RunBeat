@@ -103,8 +103,8 @@ const HELP_ENGLISH: Record<string, string> = {
     "Mapped BPM was first adjusted from a long beat sequence, then phase was locked. Preview later in the track to confirm that it remains aligned.",
   "使用手动填写的歌曲首拍作为相位；系统视为已确认，但仍应试听检查 BPM 是否正确。":
     "Uses the manually entered first beat as phase. The system treats it as confirmed, but you should still preview the track to verify BPM.",
-  "没有足够一致的拍点簇。先核对 BPM，再在“高级”页设置歌曲首拍。":
-    "No sufficiently consistent beat cluster was found. Verify BPM first, then set the track's first beat on the Advanced tab.",
+  "没有足够一致的拍点簇。先核对 BPM，再在“试听”页设置歌曲首拍。":
+    "No sufficiently consistent beat cluster was found. Verify BPM first, then set the track's first beat on the Preview tab.",
 
   "综合质量标准": "Overall Quality Criteria",
   "综合质量取“变速、全局 BPM 置信度、相位对齐”三个分项中最差的一项，因此一个项目即使 BPM 很准，也可能因为相位未锁定而显示“需校准”。":
@@ -159,6 +159,12 @@ const HELP_ENGLISH: Record<string, string> = {
     "Processed: Preserves pitch and matches target SPM without footstep cues.",
   "处理后 + 节拍轨：同时检查变速听感和脚步是否贴拍。":
     "Processed + Beat Track: Check both tempo-adjusted sound and footstep alignment.",
+  "试听会从播放头连续播放到裁剪出点；拖动播放头后会从新位置继续。":
+    "Preview plays continuously from the playhead to the trim out point. Drag the playhead to continue from a new position.",
+  "试听中修改首拍或提前/延后半拍，只会重排后续节拍，音乐不会中断。":
+    "Changing the first beat or half-beat offset during preview reschedules future beats without interrupting the music.",
+  "连续试听使用固定预览音量和过载保护；最终导出仍按项目中的响度标准化设置处理。":
+    "Continuous preview uses a fixed monitoring level and overload protection. Final export still follows the project's loudness-normalization setting.",
   "如果整段都固定错位，调整首拍；如果越往后越偏，优先核对 BPM。":
     "If the whole segment has a fixed offset, adjust the first beat. If drift grows over time, verify BPM first.",
   "裁剪入点后，相位会按新的歌曲起点换算，无需重复补偿同一段偏移。":
@@ -305,8 +311,8 @@ const ENGLISH: Record<string, string> = {
     "Open Project Properties from the Project menu. Use General for target cadence and matching rules, and Beat Track for the global footstep cue.",
   "详细列表中的顺序就是连续导出的播放顺序。使用 Ctrl/Shift 多选，Space 切换是否导出，Alt+上/下移动歌曲。":
     "The detail-list order is the playback order for continuous export. Use Ctrl/Shift to select, Space to toggle export, and Alt+Up/Down to move tracks.",
-  "右侧歌曲检查器跟随焦点歌曲。“试听”页可比较原始、处理后和含节拍版本；“高级”页用于手动 BPM、首拍和裁剪。":
-    "The Track Inspector follows the focused track. Preview compares original, processed, and beat-track versions; Advanced provides manual BPM, first-beat, and trim controls.",
+  "右侧歌曲检查器跟随焦点歌曲。“试听”页可比较原始、处理后和含节拍版本，并提供手动 BPM、首拍和裁剪。":
+    "The Track Inspector follows the focused track. Preview compares original, processed, and beat-track versions and provides manual BPM, first-beat, and trim controls.",
   "按 Ctrl+E 打开导出向导。依次选择内容、音频格式并确认摘要；导出期间可以取消，音乐不会上传。":
     "Press Ctrl+E to open the Export Wizard. Choose the content and audio format, then review the summary. You can cancel during export, and your music is never uploaded.",
   "加入第一首歌曲后，项目会按“歌曲名”或“歌曲名 等 X 首”自动命名并保存到本机；后续更改也会自动保存。Ctrl+S 可立即保存，Ctrl+Shift+S 可另存副本。":
@@ -396,7 +402,6 @@ const ENGLISH: Record<string, string> = {
   "未选择歌曲": "No track selected",
   "分析": "Analysis",
   "试听": "Preview",
-  "高级": "Advanced",
   "歌曲属性页": "Track property pages",
   "在歌曲列表中选择一首歌曲。": "Select a track in the track list.",
   "分析结果": "Analysis Results",
@@ -404,17 +409,20 @@ const ENGLISH: Record<string, string> = {
   "拍点:": "Beats:",
   "相位:": "Phase:",
   "警告": "Warnings",
+  "未提供错误详情。": "No error details were provided.",
   "正在分析...": "Analyzing...",
   "试听位置": "Preview Position",
-  "起点:": "Start:",
-  "分析完成后可以试听。": "Preview is available after analysis completes.",
+  "播放头:": "Playhead:",
   "试听版本": "Preview Version",
   "原始音频": "Original Audio",
   "处理后": "Processed",
   "处理后 + 节拍轨": "Processed + Beat Track",
   "停止": "Stop",
   "正在准备试听片段...": "Preparing preview...",
+  "正在缓冲试听...": "Buffering preview...",
   "试听中": "Previewing",
+  "试听已结束": "Preview ended",
+  "试听失败": "Preview failed",
   "手动校准": "Manual Calibration",
   "首拍(秒):": "First beat (sec):",
   "自动检测": "Auto detect",
@@ -424,6 +432,10 @@ const ENGLISH: Record<string, string> = {
   "裁剪": "Trim",
   "入点(秒):": "In point (sec):",
   "出点(秒):": "Out point (sec):",
+  "试听中修改首拍或相位，会从下一个节拍开始生效。":
+    "Changes to the first beat or phase take effect from the next beat during preview.",
+  "修改 BPM 或裁剪后，需重新开始试听。":
+    "Restart preview after changing BPM or trim points.",
   "需校准 · 未锁定": "Needs calibration · Unlocked",
   "手动锁定": "Manually locked",
   "使用手动指定的歌曲首拍": "Using the manually specified first beat",
@@ -582,8 +594,8 @@ const ENGLISH: Record<string, string> = {
     "Click to select a track; use Ctrl or Shift for multiple selection. Double-click to preview the processed track with its beat track, and Delete to remove selected tracks.",
   "单击选择歌曲，Ctrl 或 Shift 可多选。双击试听带节拍轨的处理后歌曲，Delete 删除所选歌曲。单击列标题可排序；“变速”列按带正负号的百分比排序。右键单击列标题可隐藏或恢复数据列。":
     "Click to select a track; use Ctrl or Shift for multiple selection. Double-click to preview the processed track with its beat track, or Delete to remove selected tracks. Click a column header to sort; Tempo Change uses its signed percentage. Right-click a column header to hide or restore data columns.",
-  "选择试听位置后，可以比较原始音频、处理后音频和带全局节拍轨的版本。每段最多播放 20 秒。":
-    "Choose a preview position, then compare original, processed, and global-beat-track versions. Each preview plays for up to 20 seconds."
+  "试听会从播放头连续播放到裁剪出点。播放中可拖动播放头；修改首拍或半拍相位会直接更新后续节拍。":
+    "Preview plays continuously from the playhead to the trim out point. Drag the playhead during playback; first-beat and half-beat changes update future beats immediately."
 };
 
 function readInitialLanguage(): AppLanguage {

@@ -1,22 +1,38 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { ProjectV1, Track } from "../../domain/types";
 import { useI18n } from "../../i18n";
-import { previewSourceRange, previewStartBounds } from "../../services/previewRange";
+import type {
+  PreviewAlignment,
+  TrackPreviewMode,
+  TrackPreviewSession,
+  TrackPreviewSnapshot
+} from "../../services/preview";
+import { unlockPreviewAudio } from "../../services/previewContext";
 import { formatDuration } from "../../utils/format";
 import { ClassicIcon } from "../ClassicIcon";
 
-type PreviewMode = "original" | "processed" | "processed-beat";
-type InspectorTab = "analysis" | "preview" | "advanced";
-type PreviewStatus = "preparing" | "playing";
+type InspectorTab = "analysis" | "preview";
 interface TrackPreviewRequest {
   trackId: string;
-  mode: Exclude<PreviewMode, "original">;
+  mode: Exclude<TrackPreviewMode, "original">;
+}
+
+interface ActivePreview {
+  id: number;
+  trackId: string;
+  mode: TrackPreviewMode;
+  snapshot: TrackPreviewSnapshot;
+}
+
+interface TrackEditDraft {
+  manualBpm?: string;
+  sourceIn?: string;
+  sourceOut?: string;
 }
 
 const INSPECTOR_TABS: Array<{ id: InspectorTab; label: string }> = [
   { id: "analysis", label: "分析" },
-  { id: "preview", label: "试听" },
-  { id: "advanced", label: "高级" }
+  { id: "preview", label: "试听" }
 ];
 
 let previewServicePromise: Promise<typeof import("../../services/preview")> | undefined;
@@ -58,6 +74,14 @@ function reportError(error: unknown): void {
   window.dispatchEvent(new CustomEvent("runbeat:error", { detail: message }));
 }
 
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function positiveModulo(value: number, period: number): number {
+  return ((value % period) + period) % period;
+}
+
 export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
   project: ProjectV1;
   track?: Track;
@@ -67,46 +91,139 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
 }) {
   const { t, translateMessage } = useI18n();
   const [tab, setTab] = useState<InspectorTab>("analysis");
-  const [previewStarts, setPreviewStarts] = useState<Record<string, number>>({});
-  const [previewing, setPreviewing] = useState<{ id: number; trackId: string; mode: PreviewMode; status: PreviewStatus }>();
+  const [previewPositions, setPreviewPositions] = useState<Record<string, number>>({});
+  const [previewing, setPreviewing] = useState<ActivePreview>();
+  const [sliderEditing, setSliderEditing] = useState(false);
+  const [editDrafts, setEditDrafts] = useState<Record<string, TrackEditDraft>>({});
+  const previewPositionsRef = useRef<Record<string, number>>({});
   const previewRequest = useRef(0);
+  const previewSession = useRef<TrackPreviewSession | undefined>(undefined);
+  const unsubscribePreview = useRef<(() => void) | undefined>(undefined);
+  const sliderPointerDown = useRef(false);
+  const sliderInputActive = useRef(false);
+  const sliderDraft = useRef(0);
+  const seekTimer = useRef<number | undefined>(undefined);
+  const reportedPreviewError = useRef("");
+  const latestAlignment = useRef<PreviewAlignment>({
+    phaseOffsetSeconds: track?.derivedAnalysis?.phaseOffsetSeconds,
+    phaseNudgeBeats: track?.edit.phaseNudgeBeats ?? 0
+  });
+
   const phaseSummary = track ? phaseAlignmentSummary(track, t) : undefined;
-  const previewBounds = track?.durationSeconds
-    ? previewStartBounds(track, track.durationSeconds)
+  const sourceIn = track ? clamp(track.edit.sourceInSeconds, 0, track.durationSeconds) : 0;
+  const sourceOut = track ? clamp(track.edit.sourceOutSeconds, sourceIn, track.durationSeconds) : 0;
+  const editDraft = track ? editDrafts[track.id] : undefined;
+  const manualBpmDraft = editDraft?.manualBpm ?? track?.edit.manualBpm?.toString() ?? "";
+  const sourceInDraft = editDraft?.sourceIn ?? (track ? track.edit.sourceInSeconds.toFixed(1) : "");
+  const sourceOutDraft = editDraft?.sourceOut ?? (track ? track.edit.sourceOutSeconds.toFixed(1) : "");
+  const storedPosition = track ? clamp(previewPositions[track.id] ?? sourceIn, sourceIn, sourceOut) : 0;
+  const sessionPosition = previewing && previewing.trackId === track?.id
+    ? clamp(previewing.snapshot.sourcePositionSeconds, sourceIn, sourceOut)
     : undefined;
-  const previewRange = track?.durationSeconds
-    ? previewSourceRange(track, track.durationSeconds, previewStarts[track.id])
-    : undefined;
-  const previewProgress = previewBounds && previewRange && previewBounds.maxSeconds > previewBounds.minSeconds
-    ? (previewRange.startSeconds - previewBounds.minSeconds) / (previewBounds.maxSeconds - previewBounds.minSeconds) * 100
+  const previewPosition = sliderEditing ? storedPosition : sessionPosition ?? storedPosition;
+  const previewProgress = sourceOut > sourceIn
+    ? (previewPosition - sourceIn) / (sourceOut - sourceIn) * 100
     : 0;
-  const activePreviewMode = previewing && previewing.trackId === track?.id ? previewing.mode : undefined;
+  const activePreviewMode = previewing
+    && previewing.trackId === track?.id
+    && !["ended", "failed"].includes(previewing.snapshot.status)
+    ? previewing.mode
+    : undefined;
 
   const stop = useCallback(() => {
     previewRequest.current += 1;
+    if (seekTimer.current != null) window.clearTimeout(seekTimer.current);
+    seekTimer.current = undefined;
+    unsubscribePreview.current?.();
+    unsubscribePreview.current = undefined;
+    previewSession.current?.stop();
+    previewSession.current = undefined;
+    sliderInputActive.current = false;
     void previewServicePromise?.then(({ stopPreview }) => stopPreview());
     setPreviewing(undefined);
+    setSliderEditing(false);
   }, []);
 
-  const preview = useCallback(async (mode: PreviewMode) => {
+  const trackId = track?.id;
+  const phaseOffsetSeconds = track?.derivedAnalysis?.phaseOffsetSeconds;
+  const phaseNudgeBeats = track?.edit.phaseNudgeBeats;
+  useEffect(() => {
+    if (phaseNudgeBeats == null) return;
+    const alignment = { phaseOffsetSeconds, phaseNudgeBeats };
+    latestAlignment.current = alignment;
+    const session = previewSession.current;
+    if (!session || previewing?.trackId !== trackId) return;
+    session.updateAlignment(alignment);
+  }, [
+    previewing?.trackId,
+    trackId,
+    phaseOffsetSeconds,
+    phaseNudgeBeats
+  ]);
+
+  const preview = useCallback(async (mode: TrackPreviewMode) => {
     if (!track) return;
+    unlockPreviewAudio();
+    const requestedPosition = clamp(
+      previewPositionsRef.current[track.id] ?? track.edit.sourceInSeconds,
+      track.edit.sourceInSeconds,
+      track.edit.sourceOutSeconds
+    );
+    const startSeconds = requestedPosition >= track.edit.sourceOutSeconds - 0.01
+      ? track.edit.sourceInSeconds
+      : requestedPosition;
+    stop();
     const id = previewRequest.current + 1;
     previewRequest.current = id;
-    setPreviewing({ id, trackId: track.id, mode, status: "preparing" });
+    const initialSnapshot: TrackPreviewSnapshot = {
+      status: "preparing",
+      mode,
+      sourcePositionSeconds: startSeconds,
+      bufferedThroughSeconds: startSeconds,
+      sourceEndSeconds: track.edit.sourceOutSeconds
+    };
+    setPreviewing({ id, trackId: track.id, mode, snapshot: initialSnapshot });
+    previewPositionsRef.current[track.id] = startSeconds;
+    setPreviewPositions((current) => ({ ...current, [track.id]: startSeconds }));
+    sliderDraft.current = startSeconds;
+    reportedPreviewError.current = "";
     try {
-      const { playPreview } = await loadPreviewService();
+      const { startPreview } = await loadPreviewService();
       if (previewRequest.current !== id) return;
-      await playPreview(track, project, mode, previewRange?.startSeconds);
+      const session = startPreview(track, project, mode, startSeconds);
+      if (previewRequest.current !== id) {
+        session.stop();
+        return;
+      }
+      previewSession.current = session;
+      session.updateAlignment(latestAlignment.current);
+      const latestPosition = clamp(
+        sliderDraft.current,
+        track.edit.sourceInSeconds,
+        track.edit.sourceOutSeconds
+      );
+      if (Math.abs(latestPosition - startSeconds) >= 0.001) session.seek(latestPosition);
+      unsubscribePreview.current = session.subscribe((snapshot) => {
+        if (previewRequest.current !== id) return;
+        setPreviewing({ id, trackId: track.id, mode, snapshot });
+        if (!sliderInputActive.current) {
+          sliderDraft.current = snapshot.sourcePositionSeconds;
+          previewPositionsRef.current[track.id] = snapshot.sourcePositionSeconds;
+          setPreviewPositions((current) => ({
+            ...current,
+            [track.id]: snapshot.sourcePositionSeconds
+          }));
+        }
+        if (snapshot.status === "failed" && snapshot.error && reportedPreviewError.current !== snapshot.error) {
+          reportedPreviewError.current = snapshot.error;
+          reportError(snapshot.error);
+        }
+      });
     } catch (error) {
       if (previewRequest.current === id) setPreviewing(undefined);
       reportError(error);
-      return;
     }
-    setPreviewing((current) => current?.id === id ? { ...current, status: "playing" } : current);
-    window.setTimeout(() => {
-      if (previewRequest.current === id) setPreviewing(undefined);
-    }, 20_000);
-  }, [project, track, previewRange]);
+  }, [project, stop, track]);
 
   useEffect(() => {
     const handlePreviewRequest = (event: Event) => {
@@ -121,10 +238,132 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
 
   useEffect(() => () => stop(), [stop, track?.id]);
 
-  const selectPreviewStart = (startSeconds: number) => {
+  const commitSeek = (requested: number) => {
     if (!track) return;
+    if (seekTimer.current != null) window.clearTimeout(seekTimer.current);
+    seekTimer.current = undefined;
+    const next = clamp(requested, sourceIn, sourceOut);
+    sliderDraft.current = next;
+    sliderInputActive.current = false;
+    previewPositionsRef.current[track.id] = next;
+    setPreviewPositions((current) => ({ ...current, [track.id]: next }));
+    previewSession.current?.seek(next);
+    setSliderEditing(false);
+  };
+
+  const scheduleKeyboardSeek = () => {
+    if (seekTimer.current != null) window.clearTimeout(seekTimer.current);
+    seekTimer.current = window.setTimeout(() => {
+      seekTimer.current = undefined;
+      commitSeek(sliderDraft.current);
+    }, 250);
+  };
+
+  const updatePreviewSlider = (value: number) => {
+    if (!track) return;
+    sliderDraft.current = value;
+    sliderInputActive.current = true;
+    previewPositionsRef.current[track.id] = value;
+    setSliderEditing(true);
+    setPreviewPositions((current) => ({ ...current, [track.id]: value }));
+    if (!sliderPointerDown.current) scheduleKeyboardSeek();
+  };
+
+  const commitEdit = (patch: Partial<Track["edit"]>) => {
     stop();
-    setPreviewStarts((current) => ({ ...current, [track.id]: startSeconds }));
+    onTrackEdit(patch);
+  };
+
+  const setEditDraft = (field: keyof TrackEditDraft, value?: string) => {
+    if (!track) return;
+    setEditDrafts((current) => {
+      const nextTrack = { ...current[track.id] };
+      if (value == null) delete nextTrack[field];
+      else nextTrack[field] = value;
+      return { ...current, [track.id]: nextTrack };
+    });
+  };
+
+  const commitManualBpm = () => {
+    if (!track) return;
+    const parsed = manualBpmDraft.trim() === "" ? undefined : Number(manualBpmDraft);
+    if (parsed != null && !Number.isFinite(parsed)) {
+      setEditDraft("manualBpm");
+      return;
+    }
+    const next = parsed == null ? undefined : clamp(parsed, 40, 240);
+    setEditDraft("manualBpm");
+    if (next !== track.edit.manualBpm) commitEdit({ manualBpm: next });
+  };
+
+  const commitSourceIn = () => {
+    if (!track) return;
+    if (sourceInDraft.trim() === "") {
+      setEditDraft("sourceIn");
+      return;
+    }
+    const parsed = Number(sourceInDraft);
+    if (!Number.isFinite(parsed)) {
+      setEditDraft("sourceIn");
+      return;
+    }
+    const next = clamp(parsed, 0, track.edit.sourceOutSeconds);
+    setEditDraft("sourceIn");
+    if (next !== track.edit.sourceInSeconds) commitEdit({ sourceInSeconds: next });
+  };
+
+  const commitSourceOut = () => {
+    if (!track) return;
+    if (sourceOutDraft.trim() === "") {
+      setEditDraft("sourceOut");
+      return;
+    }
+    const parsed = Number(sourceOutDraft);
+    if (!Number.isFinite(parsed)) {
+      setEditDraft("sourceOut");
+      return;
+    }
+    const next = clamp(parsed, track.edit.sourceInSeconds, track.durationSeconds);
+    setEditDraft("sourceOut");
+    if (next !== track.edit.sourceOutSeconds) commitEdit({ sourceOutSeconds: next });
+  };
+
+  const handleDraftKey = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") event.currentTarget.blur();
+  };
+
+  const hotUpdateAlignment = (alignment: PreviewAlignment) => {
+    latestAlignment.current = alignment;
+    previewSession.current?.updateAlignment(alignment);
+  };
+
+  const changeFirstBeat = (rawValue: string) => {
+    if (!track) return;
+    const parsed = rawValue === "" ? undefined : Number(rawValue);
+    if (parsed != null && !Number.isFinite(parsed)) return;
+    const manualFirstBeat = parsed == null
+      ? undefined
+      : clamp(parsed, 0, track.durationSeconds);
+    if (manualFirstBeat != null && Number.isFinite(manualFirstBeat)) {
+      const interval = 60 / project.targetSpm;
+      hotUpdateAlignment({
+        phaseOffsetSeconds: positiveModulo(
+          manualFirstBeat * (track.derivedAnalysis?.timeRatio ?? 1),
+          interval
+        ),
+        phaseNudgeBeats: track.edit.phaseNudgeBeats
+      });
+    }
+    onTrackEdit({ manualFirstBeat });
+  };
+
+  const changePhaseNudge = (phaseNudgeBeats: -0.5 | 0 | 0.5) => {
+    if (!track) return;
+    hotUpdateAlignment({
+      phaseOffsetSeconds: track.derivedAnalysis?.phaseOffsetSeconds,
+      phaseNudgeBeats
+    });
+    onTrackEdit({ phaseNudgeBeats });
   };
 
   const moveTabFocus = (event: KeyboardEvent<HTMLButtonElement>, current: InspectorTab) => {
@@ -140,6 +379,14 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
     setTab(next.id);
     window.requestAnimationFrame(() => document.getElementById(`inspector-tab-${next.id}`)?.focus());
   };
+
+  const previewStatusLabel = previewing ? {
+    preparing: t("正在准备试听片段..."),
+    buffering: t("正在缓冲试听..."),
+    playing: t("试听中"),
+    ended: t("试听已结束"),
+    failed: t("试听失败")
+  }[previewing.snapshot.status] : undefined;
 
   return (
     <aside className="inspector-pane" aria-label={t("歌曲检查器")}>
@@ -175,11 +422,20 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
               <dt>{t("相位:")}</dt><dd title={phaseSummary?.detail}>{phaseSummary?.label ?? "--"}</dd>
             </dl>
           </fieldset>
+          {track.status === "failed" && <fieldset className="analysis-error-panel" role="alert">
+            <legend><span><ClassicIcon name="error" />{t("分析失败")}</span></legend>
+            <p className="analysis-error-message">
+              {translateMessage(track.error) || t("未提供错误详情。")}
+            </p>
+            <button type="button" disabled={busy} onClick={onReanalyze}>
+              {busy ? t("正在分析...") : t("重新分析")}
+            </button>
+          </fieldset>}
           {!!track.derivedAnalysis?.warnings.length && <fieldset>
             <legend>{t("警告")}</legend>
             <ul className="classic-warning-list">{track.derivedAnalysis.warnings.map((warning) => <li key={warning}>{translateMessage(warning)}</li>)}</ul>
           </fieldset>}
-          {(track.status === "failed" || track.rawAnalysis?.beatTicks.length === 0) && <button type="button" disabled={busy} onClick={onReanalyze}>
+          {track.status !== "failed" && track.rawAnalysis?.beatTicks.length === 0 && <button type="button" disabled={busy} onClick={onReanalyze}>
             {busy ? t("正在分析...") : t("重新分析")}
           </button>}
         </div>}
@@ -187,27 +443,51 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
         {track && tab === "preview" && <div className="inspector-tab-content" data-help="track-preview">
           <fieldset>
             <legend>{t("试听位置")}</legend>
-            {previewRange && previewBounds ? <>
-              <div className="field-row preview-start-row">
-                <label htmlFor={`preview-start-${track.id}`}>{t("起点:")}</label>
-                <strong>{formatDuration(previewRange.startSeconds)}</strong>
-              </div>
-              <input
-                id={`preview-start-${track.id}`}
-                className="preview-position-slider"
-                type="range"
-                min={previewBounds.minSeconds}
-                max={previewBounds.maxSeconds}
-                step={0.5}
-                value={previewRange.startSeconds}
-                aria-valuetext={formatDuration(previewRange.startSeconds)}
-                disabled={previewBounds.maxSeconds <= previewBounds.minSeconds}
-                style={{ "--preview-progress": `${previewProgress}%` } as CSSProperties}
-                onChange={(event) => selectPreviewStart(Number(event.target.value))}
-              />
-              <div className="preview-time-scale"><span>{formatDuration(previewBounds.minSeconds)}</span><span>{formatDuration(previewBounds.maxSeconds)}</span></div>
-              <div className="preview-source-range">{formatDuration(previewRange.startSeconds)} - {formatDuration(previewRange.endSeconds)}</div>
-            </> : <p>{t("分析完成后可以试听。")}</p>}
+            <div className="field-row preview-start-row">
+              <label htmlFor={`preview-start-${track.id}`}>{t("播放头:")}</label>
+              <strong>{formatDuration(previewPosition)}</strong>
+            </div>
+            <input
+              id={`preview-start-${track.id}`}
+              className="preview-position-slider"
+              type="range"
+              min={sourceIn}
+              max={sourceOut}
+              step={0.1}
+              value={previewPosition}
+              aria-valuetext={formatDuration(previewPosition)}
+              disabled={sourceOut <= sourceIn}
+              style={{ "--preview-progress": `${previewProgress}%` } as CSSProperties}
+              onPointerDown={() => {
+                sliderDraft.current = previewPosition;
+                sliderPointerDown.current = true;
+                sliderInputActive.current = true;
+                setSliderEditing(true);
+              }}
+              onFocus={() => {
+                if (!sliderInputActive.current) sliderDraft.current = previewPosition;
+              }}
+              onPointerUp={() => {
+                sliderPointerDown.current = false;
+                commitSeek(sliderDraft.current);
+              }}
+              onPointerCancel={() => {
+                sliderPointerDown.current = false;
+                commitSeek(sliderDraft.current);
+              }}
+              onChange={(event) => updatePreviewSlider(Number(event.target.value))}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitSeek(sliderDraft.current);
+                }
+              }}
+              onBlur={() => {
+                if (!sliderPointerDown.current && sliderInputActive.current) commitSeek(sliderDraft.current);
+              }}
+            />
+            <div className="preview-time-scale"><span>{formatDuration(sourceIn)}</span><span>{formatDuration(sourceOut)}</span></div>
+            <div className="preview-source-range">{formatDuration(previewPosition)} - {formatDuration(sourceOut)}</div>
           </fieldset>
           <fieldset>
             <legend>{t("试听版本")}</legend>
@@ -218,35 +498,77 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
               <button type="button" disabled={!activePreviewMode} onClick={stop}><ClassicIcon name="stop" />{t("停止")}</button>
             </div>
           </fieldset>
-          {activePreviewMode && <div className="classic-progress-label" role="status">
-            {t(previewing?.status === "playing" ? "试听中" : "正在准备试听片段...")}
+          {previewStatusLabel && <div className="classic-progress-label" role="status">
+            {previewStatusLabel}
           </div>}
-        </div>}
-
-        {track && tab === "advanced" && <div className="inspector-tab-content">
           <fieldset>
             <legend>{t("手动校准")}</legend>
             <div className="classic-form-grid">
               <label htmlFor={`manual-bpm-${track.id}`}>BPM:</label>
-              <input id={`manual-bpm-${track.id}`} type="number" min={40} max={240} placeholder={track.rawAnalysis?.rawBpm.toFixed(2)} value={track.edit.manualBpm ?? ""} onChange={(event) => onTrackEdit({ manualBpm: event.target.value ? Number(event.target.value) : undefined })} />
+              <input
+                id={`manual-bpm-${track.id}`}
+                type="number"
+                min={40}
+                max={240}
+                placeholder={track.rawAnalysis?.rawBpm.toFixed(2)}
+                value={manualBpmDraft}
+                onChange={(event) => setEditDraft("manualBpm", event.target.value)}
+                onBlur={commitManualBpm}
+                onKeyDown={handleDraftKey}
+              />
               <label htmlFor={`first-beat-${track.id}`}>{t("首拍(秒):")}</label>
-              <input id={`first-beat-${track.id}`} type="number" min={0} max={track.durationSeconds} step={0.01} placeholder={t("自动检测")} value={track.edit.manualFirstBeat ?? ""} onChange={(event) => onTrackEdit({ manualFirstBeat: event.target.value ? Math.max(0, Math.min(Number(event.target.value), track.durationSeconds)) : undefined })} />
+              <input
+                id={`first-beat-${track.id}`}
+                type="number"
+                min={0}
+                max={track.durationSeconds}
+                step={0.01}
+                placeholder={t("自动检测")}
+                value={track.edit.manualFirstBeat ?? ""}
+                onChange={(event) => changeFirstBeat(event.target.value)}
+              />
               <label htmlFor={`phase-${track.id}`}>{t("相位:")}</label>
-              <select id={`phase-${track.id}`} value={track.edit.phaseNudgeBeats} onChange={(event) => onTrackEdit({ phaseNudgeBeats: Number(event.target.value) as -0.5 | 0 | 0.5 })}>
+              <select
+                id={`phase-${track.id}`}
+                value={track.edit.phaseNudgeBeats}
+                onChange={(event) => changePhaseNudge(Number(event.target.value) as -0.5 | 0 | 0.5)}
+              >
                 <option value={-0.5}>{t("提前半拍")}</option>
                 <option value={0}>{t("自动")}</option>
                 <option value={0.5}>{t("延后半拍")}</option>
               </select>
             </div>
+            <p className="preview-calibration-hint">{t("试听中修改首拍或相位，会从下一个节拍开始生效。")}</p>
           </fieldset>
           <fieldset>
             <legend>{t("裁剪")}</legend>
             <div className="classic-form-grid">
               <label htmlFor={`trim-in-${track.id}`}>{t("入点(秒):")}</label>
-              <input id={`trim-in-${track.id}`} type="number" min={0} max={track.edit.sourceOutSeconds} step={0.1} value={track.edit.sourceInSeconds.toFixed(1)} onChange={(event) => onTrackEdit({ sourceInSeconds: Math.max(0, Math.min(Number(event.target.value), track.edit.sourceOutSeconds)) })} />
+              <input
+                id={`trim-in-${track.id}`}
+                type="number"
+                min={0}
+                max={track.edit.sourceOutSeconds}
+                step={0.1}
+                value={sourceInDraft}
+                onChange={(event) => setEditDraft("sourceIn", event.target.value)}
+                onBlur={commitSourceIn}
+                onKeyDown={handleDraftKey}
+              />
               <label htmlFor={`trim-out-${track.id}`}>{t("出点(秒):")}</label>
-              <input id={`trim-out-${track.id}`} type="number" min={track.edit.sourceInSeconds} max={track.durationSeconds} step={0.1} value={track.edit.sourceOutSeconds.toFixed(1)} onChange={(event) => onTrackEdit({ sourceOutSeconds: Math.max(track.edit.sourceInSeconds, Math.min(Number(event.target.value), track.durationSeconds)) })} />
+              <input
+                id={`trim-out-${track.id}`}
+                type="number"
+                min={track.edit.sourceInSeconds}
+                max={track.durationSeconds}
+                step={0.1}
+                value={sourceOutDraft}
+                onChange={(event) => setEditDraft("sourceOut", event.target.value)}
+                onBlur={commitSourceOut}
+                onKeyDown={handleDraftKey}
+              />
             </div>
+            <p className="preview-calibration-hint">{t("修改 BPM 或裁剪后，需重新开始试听。")}</p>
           </fieldset>
         </div>}
       </div>

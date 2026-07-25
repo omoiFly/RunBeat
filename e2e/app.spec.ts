@@ -386,10 +386,14 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await analyzedRow.dblclick();
   await expect(page.getByRole("status")).toHaveText("正在准备试听片段...");
   await expect(page.getByRole("status")).toHaveText("试听中", { timeout: 80_000 });
+  await page.getByLabel("首拍(秒):").fill("0.20");
+  await page.getByLabel("相位:").selectOption("0.5");
+  await expect(page.getByRole("status")).toHaveText("试听中");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await page.getByRole("tab", { name: "分析" }).click();
   await expect(page.getByRole("group", { name: "分析结果" })).toContainText(/176|175|177/);
-  await page.getByRole("tab", { name: "高级" }).click();
+  await expect(page.getByRole("tab", { name: "高级" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "试听" }).click();
   await expect(page.getByLabel("BPM:")).toBeVisible();
 
   const menuBar = page.getByRole("menubar", { name: "应用程序菜单" });

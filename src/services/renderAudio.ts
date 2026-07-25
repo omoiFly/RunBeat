@@ -8,9 +8,6 @@ export type AudioStretcher = (channels: Float32Array[], timeRatio: number, sampl
 
 export {
   clampSourceRange,
-  previewSourceRange,
-  previewStartBounds,
-  type PreviewStartBounds,
   type SourceRange
 } from "./previewRange";
 
@@ -143,15 +140,15 @@ export function createRenderWorkerPool(requestedSize: number, signal?: AbortSign
 let sharedRenderPool: RenderWorkerPool | undefined;
 
 /**
- * The shared pitch-preserving stretch path used by both preview and export.
- * Preview uses one persistent worker; export creates an adaptive temporary pool.
+ * Export's pitch-preserving stretch path. Continuous preview uses the same
+ * Rubber Band adapter and settings through its own persistent worker.
  */
 export const stretchForRender: AudioStretcher = (channels, timeRatio, sampleRate) => {
   sharedRenderPool ??= createRenderWorkerPool(1);
   return sharedRenderPool.stretch(channels, timeRatio, sampleRate);
 };
 
-/** Clips, stretches and derives phase metadata exactly as the export path does. */
+/** Clips, stretches and derives phase metadata for the export path. */
 export async function prepareTrackClip(
   decoded: Pick<DecodedAudio, "channels" | "sampleRate" | "duration">,
   track: Track,

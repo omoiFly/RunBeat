@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BeatTrackSettings } from "../domain/types";
-import { generateBeatTrack, generateBeatTrackRange } from "./beatTrack";
+import { generateBeatHit, generateBeatTrack, generateBeatTrackRange } from "./beatTrack";
 
 const customSettings: BeatTrackSettings = {
   sound: "custom",
@@ -49,5 +49,23 @@ describe("chunked beat track", () => {
     }
     expect(joined[0]).toEqual(full[0]);
     expect(joined[1]).toEqual(full[1]);
+  });
+
+  it("generates the same indexed one-shot used by the live Web Audio scheduler", () => {
+    const settings: BeatTrackSettings = {
+      sound: "wood",
+      gainDb: -3,
+      accentEvery: 4,
+      alternateFeet: true,
+      duckingEnabled: false
+    };
+    const sampleRate = 1_000;
+    const full = generateBeatTrack(1.1, 120, sampleRate, settings);
+    const first = generateBeatHit(0, sampleRate, settings);
+    const second = generateBeatHit(1, sampleRate, settings);
+    expect(first[0]).toEqual(full[0].slice(0, first[0].length));
+    expect(first[1]).toEqual(full[1].slice(0, first[1].length));
+    expect(second[0]).toEqual(full[0].slice(500, 500 + second[0].length));
+    expect(second[1]).toEqual(full[1].slice(500, 500 + second[1].length));
   });
 });

@@ -9,6 +9,7 @@ import type { ProjectPropertiesDraft } from "../components/studio/ProjectPropert
 import { DEFAULT_PROJECT_NAME, type ProjectV1, type Track } from "../domain/types";
 import { useI18n } from "../i18n";
 import { deleteProject as deleteStoredProject } from "../services/db";
+import { unlockPreviewAudio } from "../services/previewContext";
 import { sortTracks, type TrackSortDirection, type TrackSortKey } from "../services/trackSorting";
 import { useProjectStore } from "../store/projectStore";
 
@@ -496,6 +497,7 @@ export function StudioPage() {
               reorderTracks(ids);
             }}
             onPreview={(id, mode) => {
+              unlockPreviewAudio();
               setFocusedId(id);
               if (!selectedIds.has(id)) setSelectedIds(new Set([id]));
               setInspectorVisible(true);
