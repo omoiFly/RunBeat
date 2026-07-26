@@ -324,6 +324,7 @@ const ENGLISH: Record<string, string> = {
   "跑步音乐制作工具": "Running Music Builder",
   "隐私优先：所有音频分析与处理均在您的设备本地完成，文件不会上传。":
     "Privacy first: all audio analysis and processing is performed locally on your device. Your files are never uploaded.",
+  "GitHub 源代码仓库": "GitHub Source Repository",
   "开源技术": "Open-source Technologies",
   "RunBeat 得益于以下开源项目，谨向所有作者与贡献者致谢。":
     "RunBeat is made possible by the following open-source projects. With thanks to every author and contributor.",

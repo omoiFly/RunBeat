@@ -370,6 +370,15 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
                 <p>{t("跑步音乐制作工具")}</p>
                 <p>{t("隐私优先：所有音频分析与处理均在您的设备本地完成，文件不会上传。")}</p>
                 <p title="SPDX: AGPL-3.0-or-later">GNU AGPL v3+</p>
+                <p>
+                  <a
+                    href="https://github.com/omoiFly/RunBeat"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t("GitHub 源代码仓库")}
+                  </a>
+                </p>
               </div>
             </div>
             <fieldset className="about-open-source">

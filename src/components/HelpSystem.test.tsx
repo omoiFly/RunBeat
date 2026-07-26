@@ -16,6 +16,8 @@ describe("about dialog", () => {
 
     expect(screen.getByText("隐私优先：所有音频分析与处理均在您的设备本地完成，文件不会上传。")).toBeInTheDocument();
     expect(screen.getByText("GNU AGPL v3+")).toHaveAttribute("title", "SPDX: AGPL-3.0-or-later");
+    expect(screen.getByRole("link", { name: "GitHub 源代码仓库" })).toHaveAttribute("href", "https://github.com/omoiFly/RunBeat");
+    expect(screen.getByRole("link", { name: "GitHub 源代码仓库" })).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("RunBeat 得益于以下开源项目，谨向所有作者与贡献者致谢。")).toBeInTheDocument();
     const technologies = screen.getByRole("table", { name: "开源技术" });
     expect(within(technologies).getByRole("link", { name: "Essentia.js" })).toHaveAttribute("href", "https://mtg.github.io/essentia.js/");
@@ -34,6 +36,7 @@ describe("about dialog", () => {
 
     expect(screen.getByText("Open-source Technologies")).toBeInTheDocument();
     expect(screen.getByText("Privacy first: all audio analysis and processing is performed locally on your device. Your files are never uploaded.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "GitHub Source Repository" })).toHaveAttribute("href", "https://github.com/omoiFly/RunBeat");
     expect(screen.getByText(/With thanks to every author and contributor/)).toBeInTheDocument();
   });
 });
