@@ -415,12 +415,12 @@ export function AppLayout() {
         { label: accessLabel("打开项目", "O", true), command: "open-project", shortcut: "Ctrl+O", disabled: inStudio && busy, description: t("打开保存在当前设备上的项目。") },
         ...recentProjectItems,
         { separator: true, label: "" },
-        { label: accessLabel("保存项目", "S"), command: "save-project", shortcut: "Ctrl+S", disabled: !inStudio || busy, description: t("保存当前项目。") },
+        { label: accessLabel("保存项目", "S"), command: "save-project", shortcut: "Ctrl+S", disabled: !inStudio || (busy && !hasSavedRecord), description: t("保存当前项目。") },
         { label: accessLabel("项目另存为", "A", true), command: "save-project-as", shortcut: "Ctrl+Shift+S", disabled: !inStudio || busy, description: t("用新名称保存项目副本。") },
         { separator: true, label: "" },
-        { label: accessLabel("添加歌曲", "M", true), command: "add-tracks", shortcut: "Insert", disabled: !inStudio || busy, description: t("向当前项目添加音频文件。") },
+        { label: accessLabel("添加歌曲", "M", true), command: "add-tracks", shortcut: "Insert", disabled: !inStudio, description: t("向当前项目添加音频文件。") },
         { label: accessLabel("导入项目文件", "I", true), command: "import-project", disabled: !inStudio || busy, description: t("从 .runbeat.json 文件导入项目。") },
-        { label: accessLabel("备份项目文件", "B", true), command: "backup-project", disabled: !inStudio || busy, description: t("下载当前项目的 JSON 备份。") },
+        { label: accessLabel("备份项目文件", "B", true), command: "backup-project", disabled: !inStudio, description: t("下载当前项目的 JSON 备份。") },
         { separator: true, label: "" },
         { label: accessLabel("导出音频", "E", true), command: "export-audio", shortcut: "Ctrl+E", disabled: !inStudio || busy, description: t("打开导出音频向导。") },
         { separator: true, label: "" },
@@ -436,10 +436,10 @@ export function AppLayout() {
         { separator: true, label: "" },
         { label: accessLabel("全选歌曲", "A"), command: "select-all", shortcut: "Ctrl+A", disabled: !inStudio, description: t("选择列表中的全部歌曲。") },
         { separator: true, label: "" },
-        { label: accessLabel("加入导出", "I"), command: "include-selected", shortcut: "Space", disabled: !inStudio || busy, description: t("把所选歌曲加入导出。") },
-        { label: accessLabel("排除导出", "X"), command: "exclude-selected", disabled: !inStudio || busy, description: t("从导出中排除所选歌曲。") },
-        { label: accessLabel("上移", "U"), command: "move-up", shortcut: "Alt+↑", disabled: !inStudio || busy, description: t("在播放顺序中上移所选歌曲。") },
-        { label: accessLabel("下移", "D"), command: "move-down", shortcut: "Alt+↓", disabled: !inStudio || busy, description: t("在播放顺序中下移所选歌曲。") },
+        { label: accessLabel("加入导出", "I"), command: "include-selected", shortcut: "Space", disabled: !inStudio, description: t("把所选歌曲加入导出。") },
+        { label: accessLabel("排除导出", "X"), command: "exclude-selected", disabled: !inStudio, description: t("从导出中排除所选歌曲。") },
+        { label: accessLabel("上移", "U"), command: "move-up", shortcut: "Alt+↑", disabled: !inStudio, description: t("在播放顺序中上移所选歌曲。") },
+        { label: accessLabel("下移", "D"), command: "move-down", shortcut: "Alt+↓", disabled: !inStudio, description: t("在播放顺序中下移所选歌曲。") },
         { separator: true, label: "" },
         { label: accessLabel("删除", "L"), command: "delete-selected", shortcut: "Del", disabled: !inStudio || busy, description: t("从项目中删除所选歌曲。") },
         { label: accessLabel("歌曲属性", "P"), command: "track-properties", shortcut: "Alt+Enter", disabled: !inStudio, description: t("显示焦点歌曲的检查器。") }
@@ -458,7 +458,7 @@ export function AppLayout() {
       name: "project",
       label: accessLabel("项目", "P"),
       items: [
-        { label: accessLabel("项目属性", "P", true), command: "project-properties", disabled: !inStudio || busy, description: t("设置项目名称、目标步频和全局节拍轨。") },
+        { label: accessLabel("项目属性", "P", true), command: "project-properties", disabled: !inStudio, description: t("设置项目名称、目标步频和全局节拍轨。") },
         { label: accessLabel("删除项目", "D", true), command: "delete-project", disabled: (!inStudio && !inProjects) || (inStudio && (!hasSavedRecord || busy)), description: inProjects ? t("永久删除本地项目列表中所选的项目。") : t("永久删除当前项目并返回本地项目列表。") },
         { separator: true, label: "" },
         { label: accessLabel("按当前范围重新选择", "S"), command: "reset-selection", disabled: !inStudio || busy, description: t("根据项目的变速范围重新设置默认导出歌曲。") },
@@ -491,8 +491,8 @@ export function AppLayout() {
   const toolbarButtons: Array<{ icon: ClassicIconName; command: AppCommand; label: string; disabled?: boolean }> = [
     { icon: "new", command: "new-project", label: t("新建项目"), disabled: inStudio && busy },
     { icon: "open", command: "open-project", label: t("打开项目"), disabled: inStudio && busy },
-    { icon: "save", command: "save-project", label: t("保存项目"), disabled: !inStudio || busy },
-    { icon: "add", command: "add-tracks", label: t("添加歌曲"), disabled: !inStudio || busy },
+    { icon: "save", command: "save-project", label: t("保存项目"), disabled: !inStudio || (busy && !hasSavedRecord) },
+    { icon: "add", command: "add-tracks", label: t("添加歌曲"), disabled: !inStudio },
     { icon: "export", command: "export-audio", label: t("导出音频"), disabled: !inStudio || busy }
   ];
 

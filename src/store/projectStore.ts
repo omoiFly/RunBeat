@@ -33,6 +33,14 @@ export interface AnalysisTaskState {
   total: number;
 }
 
+export interface ProjectPropertiesPatch {
+  name?: string;
+  targetSpm?: number;
+  mappingMode?: MappingMode;
+  maxTempoChangePercent?: ProjectV1["maxTempoChangePercent"];
+  beatTrack?: BeatTrackSettings;
+}
+
 export interface ProjectState {
   project: ProjectV1;
   savedSnapshot?: ProjectV1;
@@ -65,6 +73,7 @@ export interface ProjectState {
   setTracksExportEnabled: (trackIds: string[], enabled: boolean) => void;
   resetExportSelection: () => void;
   reorderTracks: (orderedIds: string[]) => void;
+  applyProjectProperties: (patch: ProjectPropertiesPatch, customBeatFile?: File) => Promise<void>;
   updateBeatTrack: (patch: Partial<BeatTrackSettings>) => void;
   setCustomBeatFile: (file: File) => Promise<void>;
   updateExportSettings: (patch: Partial<ExportSettings>) => void;
@@ -128,6 +137,31 @@ function withDerived(project: ProjectV1): ProjectV1 {
 let persistQueue: Promise<void> = Promise.resolve();
 let revisionCounter = 0;
 let activeAnalysisPool: AnalysisWorkerPool | undefined;
+
+interface AnalysisQueueJob {
+  trackId: string;
+  file: File;
+  preserveSourceRange: boolean;
+}
+
+interface ActiveAnalysisSession {
+  projectId: string;
+  generation: number;
+  pendingJobs: AnalysisQueueJob[];
+  completion: Promise<void>;
+  hasAddedTracks: boolean;
+  reanalysis?: {
+    trackIds: string[];
+    singleFileName?: string;
+  };
+}
+
+type ProjectStoreSet = (
+  update: Partial<ProjectState> | ProjectState | ((state: ProjectState) => Partial<ProjectState> | ProjectState)
+) => void;
+type ProjectStoreGet = () => ProjectState;
+
+let activeAnalysisSession: ActiveAnalysisSession | undefined;
 
 const HISTORY_LIMIT = 50;
 const HISTORY_MERGE_WINDOW_MS = 750;
@@ -198,6 +232,38 @@ function historicProject(
   };
 }
 
+function activeAnalysisProjectEdit(
+  state: ProjectState,
+  project: ProjectV1,
+  updateHistoryProject: (project: ProjectV1) => ProjectV1,
+  changedAt = Date.now()
+): Partial<ProjectState> {
+  const activeHistory = state.undoStack.at(-1);
+  let undoStack = state.undoStack;
+  if (activeHistory) {
+    const historyProject = updateHistoryProject(activeHistory.project);
+    if (historyProject !== activeHistory.project) {
+      undoStack = [
+        ...state.undoStack.slice(0, -1),
+        {
+          ...activeHistory,
+          project: historyProject,
+          revision: nextRevision(),
+          changedAt
+        }
+      ];
+    }
+  }
+  return {
+    project,
+    revision: nextRevision(),
+    isDirty: true,
+    saveError: undefined,
+    undoStack,
+    redoStack: []
+  };
+}
+
 function historyTrackIds(state: ProjectState, currentProject: ProjectV1): string[] {
   return [
     ...currentProject.tracks.map((track) => track.id),
@@ -216,6 +282,186 @@ function disposeActiveAnalysisPool(pool?: AnalysisWorkerPool): void {
   if (!target) return;
   if (activeAnalysisPool === target) activeAnalysisPool = undefined;
   target.dispose();
+}
+
+function invalidateActiveAnalysis(): void {
+  activeAnalysisSession = undefined;
+  disposeActiveAnalysisPool();
+}
+
+function analysisSessionIsCurrent(session: ActiveAnalysisSession, projectId?: string): boolean {
+  return activeAnalysisSession === session
+    && workspaceGeneration === session.generation
+    && (projectId == null || projectId === session.projectId);
+}
+
+async function analyzeQueueWave(
+  session: ActiveAnalysisSession,
+  jobs: AnalysisQueueJob[],
+  set: ProjectStoreSet,
+  get: ProjectStoreGet
+): Promise<void> {
+  const workOrder = [...jobs].sort((left, right) => right.file.size - left.file.size);
+  const concurrency = recommendedAnalysisConcurrency(
+    workOrder.length,
+    Math.max(...workOrder.map(({ file }) => file.size))
+  );
+  const analysisPool = createAnalysisWorkerPool(concurrency);
+  activeAnalysisPool = analysisPool;
+  let nextWork = 0;
+
+  const analyzeNext = async () => {
+    while (nextWork < workOrder.length) {
+      if (!analysisSessionIsCurrent(session, get().project.id)) return;
+      const job = workOrder[nextWork];
+      nextWork += 1;
+      try {
+        set((state) => !analysisSessionIsCurrent(session, state.project.id)
+          || !state.project.tracks.some((item) => item.id === job.trackId)
+          ? state
+          : {
+              analysisProgress: { ...state.analysisProgress, [job.trackId]: 0.05 },
+              project: {
+                ...state.project,
+                tracks: state.project.tracks.map((item) => item.id === job.trackId
+                  ? { ...item, status: "decoding", error: undefined }
+                  : item)
+              }
+            });
+        const decoded = await decodeFile(job.file, { createChannels: false });
+        if (!analysisSessionIsCurrent(session, get().project.id)) return;
+        set((state) => !analysisSessionIsCurrent(session, state.project.id)
+          || !state.project.tracks.some((item) => item.id === job.trackId)
+          ? state
+          : {
+              project: {
+                ...state.project,
+                tracks: state.project.tracks.map((item) => {
+                  if (item.id !== job.trackId) return item;
+                  const sourceOutSeconds = job.preserveSourceRange && item.edit.sourceOutSeconds > 0
+                    ? Math.min(item.edit.sourceOutSeconds, decoded.duration)
+                    : decoded.duration;
+                  return {
+                    ...item,
+                    durationSeconds: decoded.duration,
+                    edit: {
+                      ...item.edit,
+                      sourceInSeconds: job.preserveSourceRange
+                        ? Math.min(item.edit.sourceInSeconds, sourceOutSeconds)
+                        : 0,
+                      sourceOutSeconds
+                    },
+                    status: "analyzing-bpm"
+                  };
+                })
+              }
+            });
+        const analysis = await analysisPool.analyze(job.trackId, decoded.mono, decoded.sampleRate, (stage, progress) => {
+          if (stage === "beats" && get().project.exportSettings.format === "mp3") {
+            prefetchFfmpegForExport();
+          }
+          set((state) => !analysisSessionIsCurrent(session, state.project.id)
+            || !state.project.tracks.some((item) => item.id === job.trackId)
+            ? state
+            : {
+                analysisProgress: { ...state.analysisProgress, [job.trackId]: progress },
+                project: {
+                  ...state.project,
+                  tracks: state.project.tracks.map((item) => item.id === job.trackId
+                    ? { ...item, status: stage === "beats" ? "analyzing-beats" : item.status }
+                    : item)
+                }
+              });
+        });
+        set((state) => {
+          if (!analysisSessionIsCurrent(session, state.project.id)
+            || !state.project.tracks.some((item) => item.id === job.trackId)) return state;
+          const next = withDerived({
+            ...state.project,
+            updatedAt: Date.now(),
+            tracks: state.project.tracks.map((item) => item.id === job.trackId
+              ? { ...item, rawAnalysis: analysis, status: "complete", error: undefined }
+              : item)
+          });
+          return {
+            ...dirtyProject(state, next),
+            analysisProgress: { ...state.analysisProgress, [job.trackId]: 1 },
+            analysisTask: settledAnalysisTask(state.analysisTask, job.trackId)
+          };
+        });
+      } catch (error) {
+        set((state) => {
+          if (!analysisSessionIsCurrent(session, state.project.id)
+            || !state.project.tracks.some((item) => item.id === job.trackId)) return state;
+          const next = {
+            ...state.project,
+            updatedAt: Date.now(),
+            tracks: state.project.tracks.map((item): Track => item.id === job.trackId
+              ? { ...item, status: "failed", error: error instanceof Error ? error.message : String(error) }
+              : item)
+          };
+          return {
+            ...dirtyProject(state, next),
+            analysisProgress: { ...state.analysisProgress, [job.trackId]: 1 },
+            analysisTask: settledAnalysisTask(state.analysisTask, job.trackId)
+          };
+        });
+      }
+    }
+  };
+
+  try {
+    await Promise.all(Array.from({ length: concurrency }, () => analyzeNext()));
+  } finally {
+    disposeActiveAnalysisPool(analysisPool);
+  }
+}
+
+async function runAnalysisSession(
+  session: ActiveAnalysisSession,
+  set: ProjectStoreSet,
+  get: ProjectStoreGet
+): Promise<void> {
+  try {
+    while (analysisSessionIsCurrent(session, get().project.id)) {
+      const jobs = session.pendingJobs.splice(0);
+      if (!jobs.length) break;
+      await analyzeQueueWave(session, jobs, set, get);
+    }
+  } finally {
+    const isCurrent = analysisSessionIsCurrent(session, get().project.id);
+    if (activeAnalysisSession === session) activeAnalysisSession = undefined;
+    if (isCurrent) {
+      let notice: string | undefined;
+      if (session.reanalysis && !session.hasAddedTracks) {
+        const successful = get().project.tracks.filter((track) =>
+          session.reanalysis!.trackIds.includes(track.id) && track.status === "complete"
+        ).length;
+        notice = session.reanalysis.trackIds.length === 1 && successful === 1
+          ? `${session.reanalysis.singleFileName} 已重新分析。`
+          : `重新分析完成：${successful}/${session.reanalysis.trackIds.length} 首歌曲成功。`;
+      }
+      set({
+        busy: false,
+        analysisTask: undefined,
+        ...(notice ? { notice } : {})
+      });
+    }
+  }
+}
+
+function startAnalysisSession(
+  session: Omit<ActiveAnalysisSession, "completion">,
+  set: ProjectStoreSet,
+  get: ProjectStoreGet
+): Promise<void> {
+  const activeSession: ActiveAnalysisSession = {
+    ...session,
+    completion: Promise.resolve()
+  };
+  activeAnalysisSession = activeSession;
+  activeSession.completion = runAnalysisSession(activeSession, set, get);
+  return activeSession.completion;
 }
 
 function compactTrackOrder(tracks: Track[]): Track[] {
@@ -254,6 +500,69 @@ function projectWithTrackOrder(project: ProjectV1, orderedIds: string[]): Projec
   return projectAfterTrackChange(project, tracks);
 }
 
+function projectWithTrackEdit(
+  project: ProjectV1,
+  trackId: string,
+  patch: Partial<TrackEdit>,
+  updatedAt: number
+): ProjectV1 {
+  const target = project.tracks.find((track) => track.id === trackId);
+  if (!target || Object.entries(patch).every(([key, value]) => target.edit[key as keyof TrackEdit] === value)) {
+    return project;
+  }
+  return withDerived({
+    ...project,
+    tracks: project.tracks.map((track) => track.id === trackId
+      ? { ...track, edit: { ...track.edit, ...patch } }
+      : track),
+    updatedAt
+  });
+}
+
+function projectWithExportSelection(
+  project: ProjectV1,
+  trackIds: ReadonlySet<string>,
+  exportEnabled: boolean,
+  updatedAt: number
+): ProjectV1 {
+  if (!project.tracks.some((track) => trackIds.has(track.id) && track.edit.exportEnabled !== exportEnabled)) {
+    return project;
+  }
+  return {
+    ...project,
+    tracks: project.tracks.map((track) => trackIds.has(track.id)
+      ? { ...track, edit: { ...track.edit, exportEnabled } }
+      : track),
+    updatedAt
+  };
+}
+
+function projectWithProperties(project: ProjectV1, patch: ProjectPropertiesPatch, updatedAt: number): ProjectV1 {
+  const name = patch.name == null ? project.name : patch.name.trim() || DEFAULT_PROJECT_NAME;
+  const nameMode = patch.name == null ? project.nameMode : "custom";
+  const targetSpm = patch.targetSpm == null ? project.targetSpm : clampTargetSpm(patch.targetSpm);
+  const mappingMode = patch.mappingMode ?? project.mappingMode;
+  const maxTempoChangePercent = patch.maxTempoChangePercent ?? project.maxTempoChangePercent;
+  const beatTrack = patch.beatTrack ?? project.beatTrack;
+  const unchanged = name === project.name
+    && nameMode === project.nameMode
+    && targetSpm === project.targetSpm
+    && mappingMode === project.mappingMode
+    && maxTempoChangePercent === project.maxTempoChangePercent
+    && JSON.stringify(beatTrack) === JSON.stringify(project.beatTrack);
+  if (unchanged) return project;
+  return withDerived({
+    ...project,
+    name,
+    nameMode,
+    targetSpm,
+    mappingMode,
+    maxTempoChangePercent,
+    beatTrack,
+    updatedAt
+  });
+}
+
 let initializeRequest = 0;
 let workspaceGeneration = 0;
 
@@ -275,7 +584,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   initialize: async (projectId) => {
     workspaceGeneration += 1;
-    disposeActiveAnalysisPool();
+    invalidateActiveAnalysis();
     const request = ++initializeRequest;
     clearRegisteredFiles();
     clearCustomBeatSamples();
@@ -351,12 +660,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   addFiles: async (selected) => {
-    if (get().busy) {
+    const initialState = get();
+    const current = initialState.project;
+    const joiningSession = initialState.busy ? activeAnalysisSession : undefined;
+    if (initialState.busy && (!joiningSession || !analysisSessionIsCurrent(joiningSession, current.id))) {
       set({ notice: "正在分析其他歌曲，请等待当前任务完成。" });
       return;
     }
-    const generation = ++workspaceGeneration;
-    const current = get().project;
     const remaining = Math.max(0, 50 - current.tracks.length);
     const files = selected.slice(0, remaining).filter((file) => file.size <= 300 * 1024 * 1024);
     if (!files.length) {
@@ -386,6 +696,41 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const nextTracks = [...current.tracks, ...tracks];
     const project = projectAfterTrackChange(current, nextTracks);
     const trackIds = tracks.map((track) => track.id);
+    const jobs = tracks.map((track, index): AnalysisQueueJob => ({
+      trackId: track.id,
+      file: files[index],
+      preserveSourceRange: false
+    }));
+
+    if (joiningSession) {
+      let appended = false;
+      set((state) => {
+        if (!state.busy || !analysisSessionIsCurrent(joiningSession, state.project.id)) return state;
+        appended = true;
+        const activeTrackIds = state.analysisTask?.trackIds ?? [];
+        const combinedTrackIds = [...activeTrackIds, ...trackIds];
+        return {
+          ...dirtyProject(state, projectAfterTrackChange(state.project, [...state.project.tracks, ...tracks])),
+          redoStack: [],
+          analysisProgress: {
+            ...state.analysisProgress,
+            ...Object.fromEntries(trackIds.map((trackId) => [trackId, 0]))
+          },
+          analysisTask: {
+            trackIds: combinedTrackIds,
+            settledTrackIds: state.analysisTask?.settledTrackIds ?? [],
+            total: combinedTrackIds.length
+          }
+        };
+      });
+      if (!appended) return;
+      joiningSession.pendingJobs.push(...jobs);
+      joiningSession.hasAddedTracks = true;
+      await joiningSession.completion;
+      return;
+    }
+
+    const generation = ++workspaceGeneration;
     set((state) => ({
       ...historicProject(state, project, "添加歌曲"),
       busy: true,
@@ -396,83 +741,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       analysisTask: { trackIds, settledTrackIds: [], total: trackIds.length }
     }));
     prefetchRubberBandForPreview();
-    const concurrency = recommendedAnalysisConcurrency(
-      tracks.length,
-      Math.max(...files.map((file) => file.size))
-    );
-    const analysisPool = createAnalysisWorkerPool(concurrency);
-    activeAnalysisPool = analysisPool;
-    const workOrder = tracks
-      .map((_, index) => index)
-      .sort((left, right) => files[right].size - files[left].size);
-    let nextWork = 0;
-    const analyzeNext = async () => {
-      while (nextWork < workOrder.length) {
-        if (generation !== workspaceGeneration) return;
-        const index = workOrder[nextWork];
-        nextWork += 1;
-        const track = tracks[index];
-        const file = files[index];
-        try {
-          set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
-            ? state
-            : {
-                analysisProgress: { ...state.analysisProgress, [track.id]: 0.05 },
-                project: { ...state.project, tracks: state.project.tracks.map((item) => item.id === track.id ? { ...item, status: "decoding" } : item) }
-              });
-          if (!file) throw new Error("原始文件不可用");
-          const decoded = await decodeFile(file, { createChannels: false });
-          if (generation !== workspaceGeneration) return;
-          set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
-            ? state
-            : { project: { ...state.project, tracks: state.project.tracks.map((item) => item.id === track.id ? { ...item, durationSeconds: decoded.duration, edit: { ...item.edit, sourceOutSeconds: decoded.duration }, status: "analyzing-bpm" } : item) } });
-          const analysis = await analysisPool.analyze(track.id, decoded.mono, decoded.sampleRate, (stage, progress) => {
-            if (stage === "beats" && get().project.exportSettings.format === "mp3") {
-              prefetchFfmpegForExport();
-            }
-            set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
-              ? state
-              : {
-                  analysisProgress: { ...state.analysisProgress, [track.id]: progress },
-                  project: { ...state.project, tracks: state.project.tracks.map((item) => item.id === track.id ? { ...item, status: stage === "beats" ? "analyzing-beats" : item.status } : item) }
-                });
-          });
-          set((state) => {
-            if (generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)) return state;
-            const next = withDerived({
-              ...state.project,
-              updatedAt: Date.now(),
-              tracks: state.project.tracks.map((item) => item.id === track.id ? { ...item, rawAnalysis: analysis, status: "complete", error: undefined } : item)
-            });
-            return {
-              ...dirtyProject(state, next),
-              analysisProgress: { ...state.analysisProgress, [track.id]: 1 },
-              analysisTask: settledAnalysisTask(state.analysisTask, track.id)
-            };
-          });
-        } catch (error) {
-          set((state) => {
-            if (generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)) return state;
-            const next = {
-              ...state.project,
-              updatedAt: Date.now(),
-              tracks: state.project.tracks.map((item): Track => item.id === track.id ? { ...item, status: "failed", error: error instanceof Error ? error.message : String(error) } : item)
-            };
-            return {
-              ...dirtyProject(state, next),
-              analysisProgress: { ...state.analysisProgress, [track.id]: 1 },
-              analysisTask: settledAnalysisTask(state.analysisTask, track.id)
-            };
-          });
-        }
-      }
-    };
-    try {
-      await Promise.all(Array.from({ length: concurrency }, () => analyzeNext()));
-    } finally {
-      disposeActiveAnalysisPool(analysisPool);
-      if (generation === workspaceGeneration) set({ busy: false, analysisTask: undefined });
-    }
+    await startAnalysisSession({
+      projectId: current.id,
+      generation,
+      pendingJobs: jobs,
+      hasAddedTracks: true
+    }, set, get);
   },
 
   reanalyzeTrack: async (trackId) => get().reanalyzeTracks([trackId]),
@@ -510,12 +784,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
     const generation = ++workspaceGeneration;
     const trackIds = available.map(({ track }) => track.id);
-    const concurrency = recommendedAnalysisConcurrency(
-      available.length,
-      Math.max(...available.map(({ file }) => file.size))
-    );
-    const analysisPool = createAnalysisWorkerPool(concurrency);
-    activeAnalysisPool = analysisPool;
     prefetchRubberBandForPreview();
     set((state) => ({
       ...historicProject(state, state.project, "重新分析歌曲"),
@@ -526,119 +794,20 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       },
       analysisTask: { trackIds, settledTrackIds: [], total: trackIds.length }
     }));
-
-    const workOrder = available
-      .map((_, index) => index)
-      .sort((left, right) => available[right].file.size - available[left].file.size);
-    let nextWork = 0;
-    const analyzeNext = async () => {
-      while (nextWork < workOrder.length) {
-        if (generation !== workspaceGeneration) return;
-        const { track, file } = available[workOrder[nextWork]];
-        nextWork += 1;
-        try {
-          set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
-            ? state
-            : {
-                analysisProgress: { ...state.analysisProgress, [track.id]: 0.05 },
-                project: {
-                  ...state.project,
-                  tracks: state.project.tracks.map((item) => item.id === track.id
-                    ? { ...item, status: "decoding", error: undefined }
-                    : item)
-                }
-              });
-          const decoded = await decodeFile(file, { createChannels: false });
-          if (generation !== workspaceGeneration) return;
-          set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
-            ? state
-            : {
-                project: {
-                  ...state.project,
-                  tracks: state.project.tracks.map((item) => {
-                    if (item.id !== track.id) return item;
-                    const sourceOutSeconds = item.edit.sourceOutSeconds > 0
-                      ? Math.min(item.edit.sourceOutSeconds, decoded.duration)
-                      : decoded.duration;
-                    return {
-                      ...item,
-                      durationSeconds: decoded.duration,
-                      edit: {
-                        ...item.edit,
-                        sourceInSeconds: Math.min(item.edit.sourceInSeconds, sourceOutSeconds),
-                        sourceOutSeconds
-                      },
-                      status: "analyzing-bpm"
-                    };
-                  })
-                }
-              });
-          const analysis = await analysisPool.analyze(track.id, decoded.mono, decoded.sampleRate, (stage, progress) => {
-            if (stage === "beats" && get().project.exportSettings.format === "mp3") {
-              prefetchFfmpegForExport();
-            }
-            set((state) => generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)
-              ? state
-              : {
-                  analysisProgress: { ...state.analysisProgress, [track.id]: progress },
-                  project: {
-                    ...state.project,
-                    tracks: state.project.tracks.map((item) => item.id === track.id
-                      ? { ...item, status: stage === "beats" ? "analyzing-beats" : item.status }
-                      : item)
-                  }
-                });
-          });
-          set((state) => {
-            if (generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)) return state;
-            const next = withDerived({
-              ...state.project,
-              updatedAt: Date.now(),
-              tracks: state.project.tracks.map((item) => item.id === track.id
-                ? { ...item, rawAnalysis: analysis, status: "complete", error: undefined }
-                : item)
-            });
-            return {
-              ...dirtyProject(state, next),
-              analysisProgress: { ...state.analysisProgress, [track.id]: 1 },
-              analysisTask: settledAnalysisTask(state.analysisTask, track.id)
-            };
-          });
-        } catch (error) {
-          set((state) => {
-            if (generation !== workspaceGeneration || !state.project.tracks.some((item) => item.id === track.id)) return state;
-            const next = {
-              ...state.project,
-              updatedAt: Date.now(),
-              tracks: state.project.tracks.map((item): Track => item.id === track.id
-                ? { ...item, status: "failed", error: error instanceof Error ? error.message : String(error) }
-                : item)
-            };
-            return {
-              ...dirtyProject(state, next),
-              analysisProgress: { ...state.analysisProgress, [track.id]: 1 },
-              analysisTask: settledAnalysisTask(state.analysisTask, track.id)
-            };
-          });
-        }
+    await startAnalysisSession({
+      projectId: current.id,
+      generation,
+      pendingJobs: available.map(({ track, file }) => ({
+        trackId: track.id,
+        file,
+        preserveSourceRange: true
+      })),
+      hasAddedTracks: false,
+      reanalysis: {
+        trackIds,
+        singleFileName: available[0]?.track.source.fileName
       }
-    };
-
-    try {
-      await Promise.all(Array.from({ length: concurrency }, () => analyzeNext()));
-    } finally {
-      disposeActiveAnalysisPool(analysisPool);
-      if (generation === workspaceGeneration) {
-        const successful = get().project.tracks.filter((track) => trackIds.includes(track.id) && track.status === "complete").length;
-        set({
-          busy: false,
-          analysisTask: undefined,
-          notice: trackIds.length === 1 && successful === 1
-            ? `${available[0].track.source.fileName} 已重新分析。`
-            : `重新分析完成：${successful}/${trackIds.length} 首歌曲成功。`
-        });
-      }
-    }
+    }, set, get);
   },
 
   undo: () => {
@@ -730,45 +899,52 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   updateTrackEdit: (trackId, patch) => {
-    const current = get().project;
-    const target = current.tracks.find((track) => track.id === trackId);
-    if (!target || Object.entries(patch).every(([key, value]) => target.edit[key as keyof TrackEdit] === value)) return;
-    const project = withDerived({
-      ...current,
-      tracks: current.tracks.map((track) => track.id === trackId ? { ...track, edit: { ...track.edit, ...patch } } : track),
-      updatedAt: Date.now()
-    });
     const mergeKey = `track-edit:${trackId}:${Object.keys(patch).sort().join(",")}`;
-    set((state) => historicProject(state, project, "歌曲属性", mergeKey));
+    set((state) => {
+      const changedAt = Date.now();
+      const project = projectWithTrackEdit(state.project, trackId, patch, changedAt);
+      if (project === state.project) return state;
+      if (!state.busy) return historicProject(state, project, "歌曲属性", mergeKey);
+      return activeAnalysisProjectEdit(
+        state,
+        project,
+        (historyProject) => projectWithTrackEdit(historyProject, trackId, patch, changedAt),
+        changedAt
+      );
+    });
   },
 
   setTrackExportEnabled: (trackId, exportEnabled) => {
-    const current = get().project;
-    const target = current.tracks.find((track) => track.id === trackId);
-    if (!target || target.edit.exportEnabled === exportEnabled) return;
-    const project = {
-      ...current,
-      tracks: current.tracks.map((track) => track.id === trackId
-        ? { ...track, edit: { ...track.edit, exportEnabled } }
-        : track),
-      updatedAt: Date.now()
-    };
-    set((state) => historicProject(state, project, "导出选择", "export-selection"));
+    const selected = new Set([trackId]);
+    set((state) => {
+      const changedAt = Date.now();
+      const project = projectWithExportSelection(state.project, selected, exportEnabled, changedAt);
+      if (project === state.project) return state;
+      if (!state.busy) return historicProject(state, project, "导出选择", "export-selection");
+      return activeAnalysisProjectEdit(
+        state,
+        project,
+        (historyProject) => projectWithExportSelection(historyProject, selected, exportEnabled, changedAt),
+        changedAt
+      );
+    });
   },
 
   setTracksExportEnabled: (trackIds, exportEnabled) => {
     const selected = new Set(trackIds);
     if (!selected.size) return;
-    const current = get().project;
-    if (!current.tracks.some((track) => selected.has(track.id) && track.edit.exportEnabled !== exportEnabled)) return;
-    const project = {
-      ...current,
-      tracks: current.tracks.map((track) => selected.has(track.id)
-        ? { ...track, edit: { ...track.edit, exportEnabled } }
-        : track),
-      updatedAt: Date.now()
-    };
-    set((state) => historicProject(state, project, "导出选择", "export-selection"));
+    set((state) => {
+      const changedAt = Date.now();
+      const project = projectWithExportSelection(state.project, selected, exportEnabled, changedAt);
+      if (project === state.project) return state;
+      if (!state.busy) return historicProject(state, project, "导出选择", "export-selection");
+      return activeAnalysisProjectEdit(
+        state,
+        project,
+        (historyProject) => projectWithExportSelection(historyProject, selected, exportEnabled, changedAt),
+        changedAt
+      );
+    });
   },
 
   resetExportSelection: () => {
@@ -801,30 +977,52 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const project = projectWithTrackOrder(state.project, orderedIds);
       if (project === state.project) return state;
       if (!state.busy) return historicProject(state, project, "歌曲顺序", "track-order");
+      return activeAnalysisProjectEdit(
+        state,
+        project,
+        (historyProject) => projectWithTrackOrder(historyProject, orderedIds)
+      );
+    });
+  },
 
-      const activeHistory = state.undoStack.at(-1);
-      let undoStack = state.undoStack;
-      if (activeHistory) {
-        const historyProject = projectWithTrackOrder(activeHistory.project, orderedIds);
-        if (historyProject !== activeHistory.project) {
-          undoStack = [
-            ...state.undoStack.slice(0, -1),
-            {
-              ...activeHistory,
-              project: historyProject,
-              revision: nextRevision(),
-              changedAt: Date.now()
-            }
-          ];
+  applyProjectProperties: async (requestedPatch, customBeatFile) => {
+    if (!Object.keys(requestedPatch).length && !customBeatFile) return;
+    const projectId = get().project.id;
+    let patch = requestedPatch;
+    let customBeatNotice: string | undefined;
+    if (customBeatFile) {
+      const customSample = await registerCustomBeatSample(projectId, customBeatFile);
+      if (get().project.id !== projectId) return;
+      patch = {
+        ...patch,
+        beatTrack: {
+          ...(patch.beatTrack ?? get().project.beatTrack),
+          sound: "custom",
+          customSample
         }
+      };
+      customBeatNotice = `已启用自定义鼓点：${customBeatFile.name}`;
+    }
+
+    set((state) => {
+      if (state.project.id !== projectId) return state;
+      const changedAt = Date.now();
+      const project = projectWithProperties(state.project, patch, changedAt);
+      if (project === state.project) return customBeatNotice ? { notice: customBeatNotice } : state;
+      if (!state.busy) {
+        return {
+          ...historicProject(state, project, "项目属性", "project-settings"),
+          ...(customBeatNotice ? { notice: customBeatNotice } : {})
+        };
       }
       return {
-        project,
-        revision: nextRevision(),
-        isDirty: true,
-        saveError: undefined,
-        undoStack,
-        redoStack: []
+        ...activeAnalysisProjectEdit(
+          state,
+          project,
+          (historyProject) => projectWithProperties(historyProject, patch, changedAt),
+          changedAt
+        ),
+        ...(customBeatNotice ? { notice: customBeatNotice } : {})
       };
     });
   },
@@ -836,18 +1034,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => historicProject(state, project, "项目属性", "project-settings"));
   },
 
-  setCustomBeatFile: async (file) => {
-    const projectId = get().project.id;
-    const customSample = await registerCustomBeatSample(projectId, file);
-    if (get().project.id !== projectId) return;
-    const current = get().project;
-    const project = {
-      ...current,
-      beatTrack: { ...current.beatTrack, sound: "custom" as const, customSample },
-      updatedAt: Date.now()
-    };
-    set((state) => ({ ...historicProject(state, project, "项目属性", "project-settings"), notice: `已启用自定义鼓点：${file.name}` }));
-  },
+  setCustomBeatFile: async (file) => get().applyProjectProperties({}, file),
 
   updateExportSettings: (patch) => {
     const current = get().project;
@@ -874,7 +1061,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   importProject: (incoming) => {
     workspaceGeneration += 1;
-    disposeActiveAnalysisPool();
+    invalidateActiveAnalysis();
     const project = withDerived({
       ...incoming,
       id: crypto.randomUUID(),
@@ -1029,7 +1216,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   discardChanges: () => {
     workspaceGeneration += 1;
-    disposeActiveAnalysisPool();
+    invalidateActiveAnalysis();
     const state = get();
     if (!state.savedSnapshot) {
       clearRegisteredFiles();

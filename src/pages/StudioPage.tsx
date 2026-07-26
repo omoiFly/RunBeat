@@ -129,17 +129,12 @@ export function StudioPage() {
     reanalyzeTrack,
     reanalyzeTracks,
     removeTracks,
-    setTargetSpm,
-    setMappingMode,
-    setMaxTempoChange,
     updateTrackEdit,
     setTracksExportEnabled,
     resetExportSelection,
     reorderTracks,
-    updateBeatTrack,
-    setCustomBeatFile,
+    applyProjectProperties: commitProjectProperties,
     updateExportSettings,
-    renameProject,
     importProject,
     relinkFiles,
     saveCurrent,
@@ -305,8 +300,16 @@ export function StudioPage() {
 
   const handleCommand = useCallback((command: AppCommand) => {
     const allowedDuringAnalysis: readonly string[] = [
+      "add-tracks",
+      "backup-project",
+      "include-selected",
+      "exclude-selected",
+      "move-up",
+      "move-down",
       "select-all",
-      "track-properties"
+      "track-properties",
+      "project-properties",
+      ...(hasSavedRecord ? ["save-project"] : [])
     ];
     if (busy && !allowedDuringAnalysis.includes(command)) {
       useProjectStore.setState({ notice: "分析进行中；请等待任务完成后再修改项目。" });
@@ -447,12 +450,15 @@ export function StudioPage() {
   };
 
   const applyProjectProperties = async (draft: ProjectPropertiesDraft, customBeatFile?: File) => {
-    if (draft.name !== project.name) renameProject(draft.name);
-    if (draft.targetSpm !== project.targetSpm) setTargetSpm(draft.targetSpm);
-    if (draft.mappingMode !== project.mappingMode) setMappingMode(draft.mappingMode);
-    if (draft.maxTempoChangePercent !== project.maxTempoChangePercent) setMaxTempoChange(draft.maxTempoChangePercent);
-    if (JSON.stringify(draft.beatTrack) !== JSON.stringify(project.beatTrack)) updateBeatTrack(draft.beatTrack);
-    if (customBeatFile) await setCustomBeatFile(customBeatFile);
+    await commitProjectProperties({
+      ...(draft.name !== project.name ? { name: draft.name } : {}),
+      ...(draft.targetSpm !== project.targetSpm ? { targetSpm: draft.targetSpm } : {}),
+      ...(draft.mappingMode !== project.mappingMode ? { mappingMode: draft.mappingMode } : {}),
+      ...(draft.maxTempoChangePercent !== project.maxTempoChangePercent
+        ? { maxTempoChangePercent: draft.maxTempoChangePercent }
+        : {}),
+      ...(JSON.stringify(draft.beatTrack) !== JSON.stringify(project.beatTrack) ? { beatTrack: draft.beatTrack } : {})
+    }, customBeatFile);
   };
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {

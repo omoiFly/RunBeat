@@ -106,6 +106,21 @@ describe("track list columns", () => {
     expect(onSort).toHaveBeenCalledWith("filename");
   });
 
+  it("keeps export selection and reordering available while analysis is active", () => {
+    const row = renderTable(vi.fn(), { busy: true });
+
+    expect(row).toHaveAttribute("draggable", "true");
+    expect(screen.getByRole("checkbox", { name: /加入导出/ })).toBeEnabled();
+    fireEvent.contextMenu(row, { clientX: 20, clientY: 20 });
+    expect(screen.getByRole("menuitem", { name: /加入导出/ })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: /排除导出/ })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: /上移/ })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: /下移/ })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: /重新分析/ })).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: /删除/ })).toBeDisabled();
+    expect(fireEvent.keyDown(screen.getByRole("grid"), { key: "ArrowDown", altKey: true })).toBe(true);
+  });
+
   it("resizes a column with the keyboard and persists the width", () => {
     renderTable(vi.fn());
 

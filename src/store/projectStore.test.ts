@@ -140,10 +140,12 @@ describe("project edit history", () => {
     });
   });
 
-  it("groups one project-properties apply into a single undo step", () => {
-    useProjectStore.getState().setTargetSpm(188);
-    useProjectStore.getState().setMappingMode("one-step-per-beat");
-    useProjectStore.getState().setMaxTempoChange(10);
+  it("groups one project-properties apply into a single undo step", async () => {
+    await useProjectStore.getState().applyProjectProperties({
+      targetSpm: 188,
+      mappingMode: "one-step-per-beat",
+      maxTempoChangePercent: 10
+    });
 
     expect(useProjectStore.getState().undoStack).toHaveLength(1);
     useProjectStore.getState().undo();
@@ -215,6 +217,142 @@ describe("sorting during analysis", () => {
       .toEqual(["beta", "alpha"]);
     expect(restored.project.tracks.every((item) => item.status === "complete")).toBe(true);
     expect(restored.isDirty).toBe(true);
+  });
+});
+
+describe("project properties during analysis", () => {
+  it("updates the active project and analysis history snapshot without discarding progress", async () => {
+    const previousProject = {
+      ...createProject("Before"),
+      tracks: [{ ...track("active", 0), status: "complete" as const }]
+    };
+    useProjectStore.setState({
+      project: {
+        ...previousProject,
+        tracks: [{ ...previousProject.tracks[0], status: "analyzing-beats" }]
+      },
+      revision: 1,
+      savedRevision: 0,
+      undoStack: [{
+        project: previousProject,
+        revision: 0,
+        label: "重新分析歌曲",
+        changedAt: Date.now()
+      }],
+      redoStack: [],
+      isDirty: true,
+      busy: true,
+      analysisProgress: { active: 0.7 },
+      analysisTask: { trackIds: ["active"], settledTrackIds: [], total: 1 }
+    });
+
+    await useProjectStore.getState().applyProjectProperties({
+      name: "Updated",
+      targetSpm: 190,
+      mappingMode: "one-step-per-beat",
+      maxTempoChangePercent: 10,
+      beatTrack: { ...previousProject.beatTrack, sound: "click", gainDb: -6 }
+    });
+
+    const active = useProjectStore.getState();
+    expect(active.project).toMatchObject({
+      name: "Updated",
+      nameMode: "custom",
+      targetSpm: 190,
+      mappingMode: "one-step-per-beat",
+      maxTempoChangePercent: 10,
+      beatTrack: { sound: "click", gainDb: -6 },
+      tracks: [{ status: "analyzing-beats" }]
+    });
+    expect(active.busy).toBe(true);
+    expect(active.analysisProgress).toEqual({ active: 0.7 });
+    expect(active.analysisTask?.settledTrackIds).toEqual([]);
+    expect(active.undoStack).toHaveLength(1);
+    expect(active.undoStack[0].project).toMatchObject({
+      name: "Updated",
+      targetSpm: 190,
+      mappingMode: "one-step-per-beat",
+      maxTempoChangePercent: 10,
+      beatTrack: { sound: "click", gainDb: -6 },
+      tracks: [{ status: "complete" }]
+    });
+
+    useProjectStore.setState({ busy: false, analysisTask: undefined });
+    useProjectStore.getState().undo();
+    expect(useProjectStore.getState().project).toMatchObject({
+      name: "Updated",
+      targetSpm: 190,
+      tracks: [{ status: "complete" }]
+    });
+  });
+});
+
+describe("completed-track edits during analysis", () => {
+  it("keeps calibration and export selection in the active project and analysis history snapshot", () => {
+    const previousProject = {
+      ...createProject(),
+      tracks: [
+        { ...track("active", 0), status: "complete" as const },
+        {
+          ...track("editable", 1),
+          status: "complete" as const,
+          edit: { ...track("editable", 1).edit, exportEnabled: true }
+        }
+      ]
+    };
+    useProjectStore.setState({
+      project: {
+        ...previousProject,
+        tracks: [
+          { ...previousProject.tracks[0], status: "analyzing-beats" },
+          previousProject.tracks[1]
+        ]
+      },
+      revision: 1,
+      savedRevision: 0,
+      undoStack: [{
+        project: previousProject,
+        revision: 0,
+        label: "重新分析歌曲",
+        changedAt: Date.now()
+      }],
+      redoStack: [],
+      isDirty: true,
+      busy: true,
+      analysisProgress: { active: 0.7 },
+      analysisTask: { trackIds: ["active"], settledTrackIds: [], total: 1 }
+    });
+
+    useProjectStore.getState().updateTrackEdit("editable", {
+      manualBpm: 172,
+      sourceInSeconds: 0.2
+    });
+    useProjectStore.getState().setTracksExportEnabled(["editable"], false);
+
+    const active = useProjectStore.getState();
+    expect(active.project.tracks.find((item) => item.id === "editable")?.edit).toMatchObject({
+      manualBpm: 172,
+      sourceInSeconds: 0.2,
+      exportEnabled: false
+    });
+    expect(active.undoStack[0].project.tracks.find((item) => item.id === "editable")?.edit).toMatchObject({
+      manualBpm: 172,
+      sourceInSeconds: 0.2,
+      exportEnabled: false
+    });
+    expect(active.analysisProgress).toEqual({ active: 0.7 });
+    expect(active.analysisTask?.settledTrackIds).toEqual([]);
+    expect(active.busy).toBe(true);
+
+    useProjectStore.setState({ busy: false, analysisTask: undefined });
+    useProjectStore.getState().undo();
+    const restored = useProjectStore.getState();
+    expect(restored.project.tracks.find((item) => item.id === "editable")?.edit).toMatchObject({
+      manualBpm: 172,
+      sourceInSeconds: 0.2,
+      exportEnabled: false
+    });
+    expect(restored.project.tracks.find((item) => item.id === "active")?.status).toBe("complete");
   });
 });
 

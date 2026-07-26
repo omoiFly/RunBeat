@@ -317,8 +317,9 @@ export function deriveTrackAnalysis(
     agreement = Math.abs(normalizedBpm - rhythmCandidate.effectiveBpm);
   }
   const interval = 60 / targetSpm;
+  const automaticPhaseOffsetSeconds = selectedFit.phaseOffsetSeconds;
   const phaseOffsetSeconds = manualFirstBeat == null
-    ? selectedFit.phaseOffsetSeconds
+    ? automaticPhaseOffsetSeconds
     : positiveModulo(manualFirstBeat * timeRatio, interval);
   if (manualFirstBeat != null) phaseAlignmentModel = "manual";
   const phaseConfidence = manualFirstBeat == null ? selectedFit.confidence : 1;
@@ -353,6 +354,7 @@ export function deriveTrackAnalysis(
     timeRatio,
     tempoChangePercent,
     bpmAgreement: agreement,
+    automaticPhaseOffsetSeconds,
     phaseOffsetSeconds,
     phaseAlignmentModel,
     phaseConfidence,

@@ -23,4 +23,17 @@ describe("runtime message translations", () => {
     render(<LanguageProvider><RuntimeMessage>{message}</RuntimeMessage></LanguageProvider>);
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
+
+  it.each([
+    ["2 路并行 · 解码 如意往事.mp3", "2 parallel workers · Decoding 如意往事.mp3"],
+    ["2 路并行 · 保持音高变速 如意往事.mp3", "2 parallel workers · Pitch-preserving stretch · 如意往事.mp3"],
+    ["2 路并行 · 处理 1 / 3 · 如意往事.mp3", "2 parallel workers · Processing 1 / 3 · 如意往事.mp3"],
+    ["编码 MP3 2 / 3", "Encoding MP3 2 / 3"],
+    ["响度预扫描 1 / 3 · 如意往事.mp3", "Loudness pre-scan 1 / 3 · 如意往事.mp3"],
+    ["响度测量完成 · -14.2 LUFS · +1.0 dB", "Loudness measurement complete · -14.2 LUFS · +1.0 dB"],
+    ["编码 MP3（192 kbps）", "Encoding MP3 (192 kbps)"]
+  ])("translates export progress while preserving the file name: %s", (message, expected) => {
+    render(<LanguageProvider><RuntimeMessage>{message}</RuntimeMessage></LanguageProvider>);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
 });

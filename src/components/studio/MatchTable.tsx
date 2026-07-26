@@ -399,7 +399,7 @@ export function MatchTable({
   const handleKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
     if (!ordered.length) return;
     const currentIndex = Math.max(0, ordered.findIndex((track) => track.id === focusedId));
-    if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End") {
+    if (!event.altKey && (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Home" || event.key === "End")) {
       event.preventDefault();
       const nextIndex = event.key === "Home"
         ? 0
@@ -419,7 +419,7 @@ export function MatchTable({
         onSelectionChange(new Set([nextId]), nextId);
       }
       window.requestAnimationFrame(() => document.querySelector<HTMLTableRowElement>(`tr[data-track-id="${CSS.escape(nextId)}"]`)?.focus());
-    } else if (event.key === " " && selectedIds.size && !busy) {
+    } else if (event.key === " " && selectedIds.size) {
       event.preventDefault();
       const allEnabled = [...selectedIds].every((id) => tracks.find((track) => track.id === id)?.edit.exportEnabled);
       onExportEnabled([...selectedIds], !allEnabled);
@@ -490,7 +490,7 @@ export function MatchTable({
               className={selected ? "selected highlighted" : ""}
               aria-selected={selected}
               tabIndex={focused ? 0 : -1}
-              draggable={!busy}
+              draggable
               onClick={(event) => selectRow(track.id, event)}
               onDoubleClick={() => onPreview(track.id, "processed-beat")}
               onContextMenu={(event) => {
@@ -498,10 +498,6 @@ export function MatchTable({
                 openContextMenu(track.id, event.clientX, event.clientY);
               }}
               onDragStart={(event) => {
-                if (busy) {
-                  event.preventDefault();
-                  return;
-                }
                 dragId.current = track.id;
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", track.id);
@@ -515,7 +511,7 @@ export function MatchTable({
               onDrop={(event) => {
                 event.preventDefault();
                 event.currentTarget.classList.remove("drag-target");
-                if (!busy) dropBefore(track.id);
+                dropBefore(track.id);
               }}
             >
               <td data-column="export" className="export-column" onClick={(event) => event.stopPropagation()}>
@@ -523,7 +519,7 @@ export function MatchTable({
                   type="checkbox"
                   aria-label={`${track.source.fileName} ${t("加入导出")}`}
                   checked={track.edit.exportEnabled ?? false}
-                  disabled={busy || (track.status !== "complete" && typeof track.edit.exportEnabled !== "boolean")}
+                  disabled={track.status !== "complete" && typeof track.edit.exportEnabled !== "boolean"}
                   onChange={(event) => onExportEnabled([track.id], event.target.checked)}
                 />
               </td>
@@ -592,11 +588,11 @@ export function MatchTable({
       {contextMenu && <div ref={contextRef} className="classic-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
         <button type="button" role="menuitem" onClick={() => focusedId && runContext(() => onPreview(focusedId, "processed-beat"))}>{t("试听踩点")}(<u>P</u>)</button>
         <div role="separator" />
-        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onExportEnabled([...selectedIds], true))}>{t("加入导出")}(<u>I</u>)</button>
-        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onExportEnabled([...selectedIds], false))}>{t("排除导出")}(<u>X</u>)</button>
+        <button type="button" role="menuitem" onClick={() => runContext(() => onExportEnabled([...selectedIds], true))}>{t("加入导出")}(<u>I</u>)</button>
+        <button type="button" role="menuitem" onClick={() => runContext(() => onExportEnabled([...selectedIds], false))}>{t("排除导出")}(<u>X</u>)</button>
         <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(onReanalyze)}>{t("重新分析")}(<u>A</u>)</button>
-        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onMove(-1))}>{t("上移")}(<u>U</u>)</button>
-        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onMove(1))}>{t("下移")}(<u>D</u>)</button>
+        <button type="button" role="menuitem" onClick={() => runContext(() => onMove(-1))}>{t("上移")}(<u>U</u>)</button>
+        <button type="button" role="menuitem" onClick={() => runContext(() => onMove(1))}>{t("下移")}(<u>D</u>)</button>
         <div role="separator" />
         <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(onDelete)}>{t("删除")}(<u>L</u>)</button>
         <div role="separator" />

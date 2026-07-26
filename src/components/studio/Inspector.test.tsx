@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createProject, type Track } from "../../domain/types";
 import { LanguageProvider } from "../../i18n";
@@ -92,6 +92,8 @@ const track: Track = {
     tempoRatio: 1,
     timeRatio: 1,
     tempoChangePercent: 0,
+    bpmAgreement: 1,
+    automaticPhaseOffsetSeconds: 0.1,
     phaseOffsetSeconds: 0.1,
     phaseAlignmentModel: "global-bpm",
     phaseConfidence: 0.75,
@@ -114,13 +116,16 @@ const track: Track = {
   order: 0
 };
 
-function renderInspector(onTrackEdit = vi.fn()) {
+function renderInspector(
+  onTrackEdit = vi.fn(),
+  options: { busy?: boolean; targetTrack?: Track } = {}
+) {
   render(
     <LanguageProvider>
       <Inspector
         project={createProject("Test")}
-        track={track}
-        busy={false}
+        track={options.targetTrack ?? track}
+        busy={options.busy ?? false}
         onTrackEdit={onTrackEdit}
         onReanalyze={vi.fn()}
       />
@@ -161,7 +166,7 @@ describe("Inspector", () => {
     expect(onReanalyze).toHaveBeenCalledOnce();
   });
 
-  it("shows quality factors and phase metrics directly in analysis results", () => {
+  it("organizes the analysis as a Win98-style summary, details list, and compact property groups", () => {
     render(
       <LanguageProvider>
         <Inspector
@@ -174,20 +179,53 @@ describe("Inspector", () => {
       </LanguageProvider>
     );
 
-    const analysis = screen.getByText("分析结果").closest("fieldset");
-    expect(analysis).toHaveTextContent("BPM 置信度:");
-    expect(analysis).toHaveTextContent("73%");
-    expect(analysis).toHaveTextContent("可靠拍点覆盖:");
-    expect(analysis).toHaveTextContent("84%");
-    expect(analysis).toHaveTextContent("拍点中位误差:");
-    expect(analysis).toHaveTextContent("20 ms");
+    const conclusion = screen.getByRole("group", { name: "分析结论" });
+    expect(conclusion).toHaveTextContent("综合质量: 良好");
 
-    const quality = screen.getByText("综合质量计算").closest("fieldset");
-    expect(quality).toHaveTextContent("置信度 75% · 覆盖 84% · 误差 20 ms");
-    expect(quality).not.toHaveTextContent("决定项");
-    expect(quality).not.toHaveTextContent("综合质量取");
-    expect(quality).not.toHaveTextContent("良好范围：60% ～ 79%");
-    expect(quality).not.toHaveTextContent("良好：置信度 ≥72%");
+    const quality = screen.getByRole("table", { name: "质量评估" });
+    expect(within(quality).getByRole("row", { name: /变速/ })).toHaveTextContent("0.00%优秀");
+    expect(within(quality).getByRole("row", { name: /BPM 置信度/ })).toHaveTextContent("73% · 差值 1.00 BPM良好");
+    expect(within(quality).getByRole("row", { name: /相位对齐/ })).toHaveTextContent("置信度 75% · 覆盖 84% · 误差 20 ms良好");
+
+    const output = screen.getByRole("group", { name: "节奏与输出" });
+    expect(output).toHaveTextContent("主估计:120.00 BPM");
+    expect(output).toHaveTextContent("节奏估计:121.00 BPM");
+    expect(output).toHaveTextContent("最终采用:180.00 BPM");
+    expect(output).toHaveTextContent("时长:1:00 → 1:00");
+
+    const beats = screen.getByRole("group", { name: "拍点信息" });
+    expect(beats).toHaveTextContent("检测拍点:3 个");
+    expect(beats).toHaveTextContent("自动首拍:0.10 秒");
+    expect(beats).toHaveTextContent("锁定方式:全局锁定 · 稳定");
+    expect(screen.queryByText("综合质量计算")).not.toBeInTheDocument();
+    expect(screen.queryByText("自动首拍参考(秒):")).not.toBeInTheDocument();
+  });
+
+  it("uses the automatic first-beat time as the manual input reference", () => {
+    renderInspector();
+
+    expect(screen.getByLabelText("首拍(秒):")).toHaveAttribute("placeholder", "0.10");
+  });
+
+  it("allows completed-track calibration while another track is being analyzed", () => {
+    renderInspector(vi.fn(), { busy: true });
+
+    expect(screen.getByLabelText("BPM:")).toBeEnabled();
+    expect(screen.getByLabelText("首拍(秒):")).toBeEnabled();
+    expect(screen.getByLabelText("相位:")).toBeEnabled();
+    expect(screen.getByLabelText("入点(秒):")).toBeEnabled();
+    expect(screen.getByLabelText("出点(秒):")).toBeEnabled();
+
+    cleanup();
+    renderInspector(vi.fn(), {
+      busy: true,
+      targetTrack: { ...track, status: "analyzing-beats" }
+    });
+    expect(screen.getByLabelText("BPM:")).toBeDisabled();
+    expect(screen.getByLabelText("首拍(秒):")).toBeDisabled();
+    expect(screen.getByLabelText("相位:")).toBeDisabled();
+    expect(screen.getByLabelText("入点(秒):")).toBeDisabled();
+    expect(screen.getByLabelText("出点(秒):")).toBeDisabled();
   });
 
   it("integrates quality warnings into factor advice and keeps only independent warnings separate", () => {
@@ -216,9 +254,9 @@ describe("Inspector", () => {
       </LanguageProvider>
     );
 
-    const quality = screen.getByText("综合质量计算").closest("fieldset");
-    expect(quality).toHaveTextContent("建议: 试听确认");
-    expect(quality).not.toHaveTextContent("决定项");
+    const conclusion = screen.getByRole("group", { name: "分析结论" });
+    expect(conclusion).toHaveTextContent("建议: 试听确认");
+    expect(conclusion).not.toHaveTextContent("决定项");
     expect(screen.queryByText(qualityWarning)).not.toBeInTheDocument();
 
     const warnings = screen.getByText("警告").closest("fieldset");

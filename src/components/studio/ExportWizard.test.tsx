@@ -4,6 +4,43 @@ import { createProject, type Track } from "../../domain/types";
 import { LanguageProvider } from "../../i18n";
 import { ExportWizard } from "./ExportWizard";
 
+function createExportableProject() {
+  const project = createProject("Test");
+  project.tracks = [{
+    id: "track-1",
+    source: {
+      id: "source-1",
+      fileName: "song.wav",
+      fileSize: 1024,
+      mimeType: "audio/wav",
+      lastModified: 1,
+      available: true
+    },
+    durationSeconds: 60,
+    status: "complete",
+    derivedAnalysis: {
+      normalizedBpm: 180,
+      detectorOctaveFactor: 1,
+      stepsPerBeat: 1,
+      effectiveFactor: 1,
+      targetSpm: 180,
+      tempoRatio: 1,
+      timeRatio: 1,
+      tempoChangePercent: 0,
+      quality: "excellent",
+      warnings: []
+    },
+    edit: {
+      exportEnabled: true,
+      sourceInSeconds: 0,
+      sourceOutSeconds: 60,
+      phaseNudgeBeats: 0
+    },
+    order: 0
+  } satisfies Track];
+  return project;
+}
+
 describe("export content choices", () => {
   beforeEach(() => localStorage.clear());
   afterEach(cleanup);
@@ -36,39 +73,7 @@ describe("export content choices", () => {
   });
 
   it("adds an optional local cover step to continuous exports and passes the image to rendering", () => {
-    const project = createProject("Test");
-    project.tracks = [{
-      id: "track-1",
-      source: {
-        id: "source-1",
-        fileName: "song.wav",
-        fileSize: 1024,
-        mimeType: "audio/wav",
-        lastModified: 1,
-        available: true
-      },
-      durationSeconds: 60,
-      status: "complete",
-      derivedAnalysis: {
-        normalizedBpm: 180,
-        detectorOctaveFactor: 1,
-        stepsPerBeat: 1,
-        effectiveFactor: 1,
-        targetSpm: 180,
-        tempoRatio: 1,
-        timeRatio: 1,
-        tempoChangePercent: 0,
-        quality: "excellent",
-        warnings: []
-      },
-      edit: {
-        exportEnabled: true,
-        sourceInSeconds: 0,
-        sourceOutSeconds: 60,
-        phaseNudgeBeats: 0
-      },
-      order: 0
-    } satisfies Track];
+    const project = createExportableProject();
     const onStart = vi.fn();
 
     render(
@@ -102,6 +107,67 @@ describe("export content choices", () => {
     fireEvent.click(screen.getByRole("button", { name: "完成" }));
     expect(onStart).toHaveBeenCalledWith(expect.objectContaining({ id: project.id }), cover);
     expect(screen.getByRole("heading", { name: "正在生成封面视频" })).toBeVisible();
+  });
+
+  it("uses the selected interface language for the cover file picker", () => {
+    localStorage.setItem("runbeat.language.v1", "en");
+    render(
+      <LanguageProvider>
+        <ExportWizard
+          open
+          project={createProject("Test")}
+          renderState={{ status: "idle" }}
+          onSettings={vi.fn()}
+          onStart={vi.fn()}
+          onCancelRender={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </LanguageProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Next >" }));
+    expect(screen.getByRole("button", { name: "Browse..." })).toBeVisible();
+    expect(screen.getByText("No file selected")).toBeVisible();
+
+    const cover = new File(["image"], "morning-cover.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Cover image:"), { target: { files: [cover] } });
+    expect(screen.getByText("morning-cover.png")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Remove Image" })).toBeVisible();
+    expect(screen.queryByText("No file selected")).not.toBeInTheDocument();
+  });
+
+  it("translates live export progress without changing the file name", () => {
+    localStorage.setItem("runbeat.language.v1", "en");
+    render(
+      <LanguageProvider>
+        <ExportWizard
+          open
+          project={createExportableProject()}
+          renderState={{
+            status: "rendering",
+            progress: {
+              jobId: "export",
+              stage: "stretch",
+              progress: 0.24,
+              message: "2 路并行 · 保持音高变速 如意往事.mp3"
+            }
+          }}
+          onSettings={vi.fn()}
+          onStart={vi.fn()}
+          onCancelRender={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </LanguageProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Next >" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next >" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next >" }));
+    fireEvent.click(screen.getByRole("button", { name: "Finish" }));
+
+    expect(screen.getByRole("heading", { name: "Exporting Audio" })).toBeVisible();
+    expect(screen.getByText("2 parallel workers · Pitch-preserving stretch · 如意往事.mp3")).toBeVisible();
+    expect(screen.queryByText(/路并行|保持音高变速/)).not.toBeInTheDocument();
   });
 
   it("skips the cover step for separate exports", () => {

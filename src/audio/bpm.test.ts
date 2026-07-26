@@ -195,4 +195,11 @@ describe("BPM mapping", () => {
     expect(analysis.qualityFactors?.phaseAlignment).toBe("excellent");
     expect(analysis.quality).toBe("excellent");
   });
+
+  it("keeps the automatic phase available as a reference after a manual override", () => {
+    const automatic = deriveTrackAnalysis(raw, 180, "two-steps-per-beat");
+    const manual = deriveTrackAnalysis(raw, 180, "two-steps-per-beat", undefined, 0.2);
+    expect(manual.automaticPhaseOffsetSeconds).toBeCloseTo(automatic.phaseOffsetSeconds!, 8);
+    expect(manual.phaseOffsetSeconds).not.toBeCloseTo(manual.automaticPhaseOffsetSeconds!, 4);
+  });
 });

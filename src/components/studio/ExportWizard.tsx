@@ -137,18 +137,26 @@ export function ExportWizard({
                 <p>{t("选择一张图片后，合并音频会导出为带静态封面的 MP4；不选择则继续导出普通音频。")}</p>
                 <div className="classic-form-grid">
                   <label htmlFor="export-wizard-cover">{t("封面图片:")}</label>
-                  <input
-                    ref={coverInputRef}
-                    id="export-wizard-cover"
-                    type="file"
-                    accept={COVER_IMAGE_ACCEPT}
-                    onChange={selectCoverImage}
-                  />
+                  <div className={`cover-file-picker${coverImage ? " has-selection" : ""}`}>
+                    <span
+                      id="export-wizard-cover-name"
+                      className="cover-file-name sunken-panel"
+                      title={coverImage?.name}
+                    >{coverImage?.name ?? t("未选择文件")}</span>
+                    <button type="button" onClick={() => coverInputRef.current?.click()}>{t("浏览...")}</button>
+                    {coverImage && <button className="cover-file-remove" type="button" onClick={removeCoverImage}>{t("移除图片")}</button>}
+                    <input
+                      ref={coverInputRef}
+                      id="export-wizard-cover"
+                      className="visually-hidden"
+                      type="file"
+                      accept={COVER_IMAGE_ACCEPT}
+                      aria-describedby="export-wizard-cover-name"
+                      onChange={selectCoverImage}
+                    />
+                  </div>
                 </div>
-                {coverImage && <div className="cover-video-selection">
-                  <span><strong>{coverImage.name}</strong> · {(coverImage.size / 1024 / 1024).toFixed(1)} MB</span>
-                  <button type="button" onClick={removeCoverImage}>{t("移除图片")}</button>
-                </div>}
+                {coverImage && <p className="cover-file-size">{(coverImage.size / 1024 / 1024).toFixed(1)} MB</p>}
                 {coverError && <p className="wizard-error"><ClassicIcon name="warning" />{t(coverError)}</p>}
                 <p className="wizard-note">{t("支持 JPG、PNG、WebP，最大 20 MB。图片只在本机处理，不会上传；视频为 1920×1080，图片会等比缩放并留黑边。")}</p>
               </fieldset>}

@@ -65,6 +65,8 @@ export interface DerivedTrackAnalysis {
   timeRatio: number;
   tempoChangePercent: number;
   bpmAgreement?: number;
+  /** Automatically fitted phase before any manual first-beat override, in processed-audio seconds. */
+  automaticPhaseOffsetSeconds?: number;
   phaseOffsetSeconds?: number;
   /** The model that supplied the phase used by preview and export. */
   phaseAlignmentModel?: "global-bpm" | "beat-refined" | "manual";

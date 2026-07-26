@@ -382,11 +382,53 @@ test("detailed track list analyzes locally and exports a localized timeline with
   const grid = page.getByRole("grid", { name: "歌曲详细列表" });
   await expect(grid.getByText("click-176.wav")).toBeVisible();
   await expect(page.getByRole("progressbar", { name: "分析进度" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toHaveCount(0);
+  const addTracksButton = page.getByRole("toolbar", { name: "常用命令" }).getByRole("button", { name: "添加歌曲" });
+  await expect(addTracksButton).toBeEnabled();
+  const [additionalChooser] = await Promise.all([
+    page.waitForEvent("filechooser"),
+    addTracksButton.click()
+  ]);
+  await additionalChooser.setFiles({ name: "click-180.wav", mimeType: "audio/wav", buffer: clickTrackWav(180, 30) });
+  await expect(grid.getByText("click-180.wav")).toBeVisible();
+  const firstRowDuringAnalysis = grid.getByRole("row", { name: /click-176\.wav/ });
+  await expect(firstRowDuringAnalysis).toContainText("分析完成", { timeout: 80_000 });
+  await expect(page.getByRole("progressbar", { name: "分析进度" })).toBeVisible();
+  await firstRowDuringAnalysis.click();
+  await page.keyboard.press("Alt+ArrowDown");
+  await expect(grid.locator("tbody tr").nth(1)).toContainText("click-176.wav");
+  const firstExportCheckbox = grid.getByRole("checkbox", { name: "click-176.wav 加入导出" });
+  await expect(firstExportCheckbox).toBeEnabled();
+  await firstExportCheckbox.uncheck();
+  await firstExportCheckbox.check();
+  await page.getByRole("tab", { name: "试听" }).click();
+  await expect(page.getByLabel("BPM:")).toBeEnabled();
+  await expect(page.getByLabel("首拍(秒):")).toBeEnabled();
+  await expect(page.getByLabel("相位:")).toBeEnabled();
+  await expect(page.getByLabel("入点(秒):")).toBeEnabled();
+  await expect(page.getByLabel("出点(秒):")).toBeEnabled();
+  const saveButton = page.getByRole("toolbar", { name: "常用命令" }).getByRole("button", { name: "保存项目" });
+  await expect(saveButton).toBeEnabled();
+  await saveButton.click();
+  await expect(page.getByRole("progressbar", { name: "分析进度" })).toBeVisible();
+  const fileMenuButton = page.getByRole("menubar", { name: "应用程序菜单" }).getByRole("menuitem", { name: /文件\(F\)/ });
+  await fileMenuButton.click();
+  const backupItem = page.getByRole("menu", { name: "file" }).getByRole("menuitem", { name: /备份项目文件/ });
+  await expect(backupItem).toBeEnabled();
+  const [projectBackup] = await Promise.all([
+    page.waitForEvent("download"),
+    backupItem.click()
+  ]);
+  expect(projectBackup.suggestedFilename()).toMatch(/\.runbeat\.json$/);
   await grid.getByRole("columnheader", { name: "歌曲" }).click();
   await expect(grid.getByRole("columnheader", { name: "歌曲" })).toHaveAttribute("aria-sort", "ascending");
-  await expect(page.getByRole("button", { name: "停止", exact: true })).toHaveCount(0);
-  await expect(grid.getByText("分析完成")).toBeVisible({ timeout: 80_000 });
-  const qualityBreakdown = page.getByText("综合质量计算").locator("..");
+  await openProjectProperties(page);
+  const liveProjectProperties = page.getByRole("dialog", { name: "项目属性" });
+  await expect(liveProjectProperties).toBeVisible();
+  await liveProjectProperties.getByRole("button", { name: "取消" }).click();
+  await expect(grid.getByText("分析完成")).toHaveCount(2, { timeout: 80_000 });
+  await page.getByRole("tab", { name: "分析" }).click();
+  const qualityBreakdown = page.getByRole("group", { name: "质量评估" });
   await expect(qualityBreakdown).toContainText("变速");
   await expect(qualityBreakdown).toContainText("BPM 置信度");
   await expect(qualityBreakdown).toContainText("相位对齐");
@@ -402,6 +444,7 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await expect(grid.getByRole("columnheader", { name: "相位准确率" })).toBeVisible();
   await expect(grid.getByRole("columnheader", { name: "综合质量" })).toBeVisible();
   await expect(grid.getByRole("checkbox", { name: "click-176.wav 加入导出" })).toBeChecked();
+  await grid.getByRole("checkbox", { name: "click-180.wav 加入导出" }).uncheck();
 
   const analyzedRow = grid.getByRole("row", { name: /click-176\.wav/ });
   await expect(analyzedRow).toContainText(/\d+ 个/);
@@ -409,17 +452,21 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await analyzedRow.click();
   await expect(page.getByText("歌曲属性", { exact: true })).toBeVisible();
   await analyzedRow.dblclick();
-  await expect(page.getByRole("status")).toHaveText("准备中");
+  await expect(page.getByRole("status")).toHaveText(/准备中|缓冲中|播放中/);
   await expect(page.getByRole("status")).toHaveText("播放中", { timeout: 80_000 });
   await page.getByLabel("首拍(秒):").fill("0.20");
   await page.getByLabel("相位:").selectOption("0.5");
   await expect(page.getByRole("status")).toHaveText("播放中");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await page.getByRole("tab", { name: "分析" }).click();
-  await expect(page.getByRole("group", { name: "分析结果" })).toContainText(/176|175|177/);
+  const analysisResults = page.getByRole("group", { name: "节奏与输出" });
+  await expect(analysisResults).toContainText(/176|175|177/);
+  const beatDetails = page.getByRole("group", { name: "拍点信息" });
+  await expect(beatDetails).toContainText("自动首拍:");
   await expect(page.getByRole("tab", { name: "高级" })).toHaveCount(0);
   await page.getByRole("tab", { name: "试听" }).click();
   await expect(page.getByLabel("BPM:")).toBeVisible();
+  await expect(page.getByLabel("首拍(秒):")).toHaveAttribute("placeholder", /^\d+\.\d{2}$/);
 
   const menuBar = page.getByRole("menubar", { name: "应用程序菜单" });
   await menuBar.getByRole("menuitem", { name: /帮助\(H\)/ }).click();
@@ -440,11 +487,14 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await expect(wizard).toBeVisible();
   await wizard.getByRole("button", { name: /Next/ }).click();
   await expect(wizard.getByRole("group", { name: "Cover Video (Optional)" })).toBeVisible();
+  await expect(wizard.getByRole("button", { name: "Browse..." })).toBeVisible();
+  await expect(wizard.getByText("No file selected")).toBeVisible();
   await wizard.getByLabel("Cover image:").setInputFiles({
     name: "morning-cover.png",
     mimeType: "image/png",
     buffer: coverPng()
   });
+  await expect(wizard.getByText("morning-cover.png", { exact: true })).toBeVisible();
   await wizard.getByRole("button", { name: /Next/ }).click();
   await expect(wizard.getByRole("group", { name: "Video Format" })).toContainText("H.264");
   await wizard.getByLabel("Audio bit rate:").selectOption("128");
