@@ -28,7 +28,6 @@ export interface ProjectHistoryEntry {
 }
 
 export interface AnalysisTaskState {
-  kind: "add" | "reanalyze";
   trackIds: string[];
   settledTrackIds: string[];
   total: number;
@@ -54,7 +53,6 @@ export interface ProjectState {
   addFiles: (files: File[]) => Promise<void>;
   reanalyzeTrack: (trackId: string) => Promise<void>;
   reanalyzeTracks: (trackIds: string[]) => Promise<void>;
-  cancelAnalysis: () => void;
   undo: () => void;
   redo: () => void;
   removeTrack: (trackId: string) => void;
@@ -177,7 +175,7 @@ function historicProject(
   mergeKey?: string
 ): Partial<ProjectState> {
   if (state.busy) {
-    return { notice: "分析进行中；请先停止任务再修改项目。" };
+    return { notice: "分析进行中；请等待任务完成后再修改项目。" };
   }
   const changedAt = Date.now();
   const last = state.undoStack.at(-1);
@@ -234,6 +232,26 @@ function projectAfterTrackChange(project: ProjectV1, tracks: Track[]): ProjectV1
     tracks,
     updatedAt: Date.now()
   };
+}
+
+function projectWithTrackOrder(project: ProjectV1, orderedIds: string[]): ProjectV1 {
+  const availableIds = new Set(project.tracks.map((track) => track.id));
+  const seen = new Set<string>();
+  const completeOrder: string[] = [];
+  for (const id of orderedIds) {
+    if (!availableIds.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    completeOrder.push(id);
+  }
+  for (const track of [...project.tracks].sort((left, right) => left.order - right.order)) {
+    if (seen.has(track.id)) continue;
+    seen.add(track.id);
+    completeOrder.push(track.id);
+  }
+  const orderMap = new Map(completeOrder.map((id, index) => [id, index]));
+  const tracks = project.tracks.map((track) => ({ ...track, order: orderMap.get(track.id) ?? track.order }));
+  if (tracks.every((track, index) => track.order === project.tracks[index].order)) return project;
+  return projectAfterTrackChange(project, tracks);
 }
 
 let initializeRequest = 0;
@@ -334,7 +352,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   addFiles: async (selected) => {
     if (get().busy) {
-      set({ notice: "正在分析其他歌曲，请先停止当前任务。" });
+      set({ notice: "正在分析其他歌曲，请等待当前任务完成。" });
       return;
     }
     const generation = ++workspaceGeneration;
@@ -375,7 +393,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...state.analysisProgress,
         ...Object.fromEntries(trackIds.map((trackId) => [trackId, 0]))
       },
-      analysisTask: { kind: "add", trackIds, settledTrackIds: [], total: trackIds.length }
+      analysisTask: { trackIds, settledTrackIds: [], total: trackIds.length }
     }));
     prefetchRubberBandForPreview();
     const concurrency = recommendedAnalysisConcurrency(
@@ -461,7 +479,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   reanalyzeTracks: async (requestedTrackIds) => {
     if (get().busy) {
-      set({ notice: "正在分析其他歌曲，请先停止当前任务。" });
+      set({ notice: "正在分析其他歌曲，请等待当前任务完成。" });
       return;
     }
     const current = get().project;
@@ -506,7 +524,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...state.analysisProgress,
         ...Object.fromEntries(trackIds.map((trackId) => [trackId, 0]))
       },
-      analysisTask: { kind: "reanalyze", trackIds, settledTrackIds: [], total: trackIds.length }
+      analysisTask: { trackIds, settledTrackIds: [], total: trackIds.length }
     }));
 
     const workOrder = available
@@ -621,55 +639,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         });
       }
     }
-  },
-
-  cancelAnalysis: () => {
-    const state = get();
-    if (!state.busy || !state.analysisTask) return;
-    workspaceGeneration += 1;
-    disposeActiveAnalysisPool();
-    const activeTrackIds = new Set(state.analysisTask.trackIds);
-    set((currentState) => {
-      if (currentState.analysisTask?.kind === "reanalyze" && currentState.undoStack.length) {
-        const entry = currentState.undoStack.at(-1)!;
-        return {
-          project: entry.project,
-          revision: entry.revision,
-          isDirty: entry.revision !== currentState.savedRevision,
-          saveError: undefined,
-          undoStack: currentState.undoStack.slice(0, -1),
-          redoStack: [],
-          busy: false,
-          analysisProgress: {},
-          analysisTask: undefined,
-          notice: "分析已停止。已恢复重新分析前的结果。"
-        };
-      }
-      const project = {
-        ...currentState.project,
-        updatedAt: Date.now(),
-        tracks: currentState.project.tracks.map((track): Track => {
-          if (
-            !activeTrackIds.has(track.id)
-            || !["decoding", "analyzing-bpm", "analyzing-beats"].includes(track.status)
-          ) return track;
-          return {
-            ...track,
-            status: track.rawAnalysis ? "complete" : "queued",
-            error: undefined
-          };
-        })
-      };
-      const analysisProgress = { ...currentState.analysisProgress };
-      for (const trackId of activeTrackIds) delete analysisProgress[trackId];
-      return {
-        ...dirtyProject(currentState, project),
-        busy: false,
-        analysisProgress,
-        analysisTask: undefined,
-        notice: "分析已停止。未完成的歌曲仍保留在列表中。"
-      };
-    });
   },
 
   undo: () => {
@@ -828,12 +797,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   reorderTracks: (orderedIds) => {
-    const orderMap = new Map(orderedIds.map((id, index) => [id, index]));
-    const current = get().project;
-    const tracks = current.tracks.map((track) => ({ ...track, order: orderMap.get(track.id) ?? track.order }));
-    if (tracks.every((track, index) => track.order === current.tracks[index].order)) return;
-    const project = projectAfterTrackChange(current, tracks);
-    set((state) => historicProject(state, project, "歌曲顺序", "track-order"));
+    set((state) => {
+      const project = projectWithTrackOrder(state.project, orderedIds);
+      if (project === state.project) return state;
+      if (!state.busy) return historicProject(state, project, "歌曲顺序", "track-order");
+
+      const activeHistory = state.undoStack.at(-1);
+      let undoStack = state.undoStack;
+      if (activeHistory) {
+        const historyProject = projectWithTrackOrder(activeHistory.project, orderedIds);
+        if (historyProject !== activeHistory.project) {
+          undoStack = [
+            ...state.undoStack.slice(0, -1),
+            {
+              ...activeHistory,
+              project: historyProject,
+              revision: nextRevision(),
+              changedAt: Date.now()
+            }
+          ];
+        }
+      }
+      return {
+        project,
+        revision: nextRevision(),
+        isDirty: true,
+        saveError: undefined,
+        undoStack,
+        redoStack: []
+      };
+    });
   },
 
   updateBeatTrack: (patch) => {

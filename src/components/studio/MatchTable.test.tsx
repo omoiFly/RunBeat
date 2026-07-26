@@ -27,7 +27,7 @@ const track: Track = {
 
 function renderTable(
   onPreview: (id: string, mode: "processed" | "processed-beat") => void,
-  options: { onSort?: (key: string) => void; sortKey?: "filename"; sortDirection?: "asc" | "desc" } = {}
+  options: { onSort?: (key: string) => void; sortKey?: "filename"; sortDirection?: "asc" | "desc"; busy?: boolean } = {}
 ) {
   render(
     <LanguageProvider>
@@ -46,6 +46,7 @@ function renderTable(
         onSort={options.onSort ?? vi.fn()}
         sortKey={options.sortKey}
         sortDirection={options.sortDirection}
+        busy={options.busy}
       />
     </LanguageProvider>
   );
@@ -94,6 +95,15 @@ describe("track list columns", () => {
 
     expect(screen.getByRole("columnheader", { name: /歌曲/ })).toHaveAttribute("aria-sort", "descending");
     expect(screen.getByText("▼")).toBeInTheDocument();
+  });
+
+  it("keeps column sorting available while tracks are being analyzed", () => {
+    const onSort = vi.fn();
+    renderTable(vi.fn(), { onSort, busy: true });
+
+    fireEvent.click(screen.getByRole("columnheader", { name: /歌曲/ }));
+
+    expect(onSort).toHaveBeenCalledWith("filename");
   });
 
   it("resizes a column with the keyboard and persists the width", () => {

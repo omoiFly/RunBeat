@@ -2607,15 +2607,6 @@ table {
   background: repeating-linear-gradient(90deg, var(--navy) 0 7px, transparent 7px 9px);
 }
 
-.status-cancel-button {
-  min-width: 42px;
-  min-height: 16px;
-  height: 16px;
-  padding: 0 5px;
-  flex: 0 0 auto;
-  line-height: 12px;
-}
-
 .recent-project-label {
   max-width: 300px;
   overflow: hidden;

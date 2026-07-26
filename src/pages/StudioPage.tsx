@@ -309,7 +309,7 @@ export function StudioPage() {
       "track-properties"
     ];
     if (busy && !allowedDuringAnalysis.includes(command)) {
-      useProjectStore.setState({ notice: "分析进行中；请先停止任务再修改项目。" });
+      useProjectStore.setState({ notice: "分析进行中；请等待任务完成后再修改项目。" });
       return;
     }
     if (command.startsWith("open-recent-project:")) {

@@ -362,8 +362,7 @@ export function MatchTable({
       {...headerProps(column)}
       className={column === "export" ? "export-column" : undefined}
       aria-sort={sortable ? sorted ? sortDirection === "asc" ? "ascending" : "descending" : "none" : undefined}
-      aria-disabled={sortable && busy ? true : undefined}
-      onClick={sortable && !busy ? () => onSort(column as SortableColumnId) : undefined}
+      onClick={sortable ? () => onSort(column as SortableColumnId) : undefined}
     >
       <span className="column-header-content">
         <span>{label}</span>

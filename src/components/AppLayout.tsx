@@ -102,7 +102,6 @@ export function AppLayout() {
   const isDirty = useProjectStore((state) => state.isDirty);
   const canUndo = useProjectStore((state) => state.undoStack.length > 0);
   const canRedo = useProjectStore((state) => state.redoStack.length > 0);
-  const cancelAnalysis = useProjectStore((state) => state.cancelAnalysis);
   const hasSavedRecord = useProjectStore((state) => state.hasSavedRecord);
   const saveState = useProjectStore((state) => state.saveState);
   const lastSavedAt = useProjectStore((state) => state.lastSavedAt);
@@ -627,7 +626,6 @@ export function AppLayout() {
                 aria-valuemin={0}
                 aria-valuemax={100}
               ><span style={{ width: `${analysisPercent}%` }} /></div>
-              <button type="button" className="status-cancel-button" onClick={cancelAnalysis}>{t("停止")}</button>
             </>}
           </div>
           <p className="status-bar-field">{inStudio

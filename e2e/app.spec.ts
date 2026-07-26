@@ -381,6 +381,10 @@ test("detailed track list analyzes locally and exports a localized timeline with
 
   const grid = page.getByRole("grid", { name: "歌曲详细列表" });
   await expect(grid.getByText("click-176.wav")).toBeVisible();
+  await expect(page.getByRole("progressbar", { name: "分析进度" })).toBeVisible();
+  await grid.getByRole("columnheader", { name: "歌曲" }).click();
+  await expect(grid.getByRole("columnheader", { name: "歌曲" })).toHaveAttribute("aria-sort", "ascending");
+  await expect(page.getByRole("button", { name: "停止", exact: true })).toHaveCount(0);
   await expect(grid.getByText("分析完成")).toBeVisible({ timeout: 80_000 });
   const qualityBreakdown = page.getByText("综合质量计算").locator("..");
   await expect(qualityBreakdown).toContainText("变速");
@@ -452,7 +456,7 @@ test("detailed track list analyzes locally and exports a localized timeline with
   const downloadPromise = page.waitForEvent("download", { timeout: 80_000 });
   await wizard.getByRole("button", { name: "Finish" }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toMatch(/180SPM_1min\.zip$/);
+  expect(download.suggestedFilename()).toMatch(/180SPM_1min_with-beat\.zip$/);
   const path = await download.path();
   expect(path).not.toBeNull();
   const files = unzipSync(await readFile(path!));
@@ -461,6 +465,7 @@ test("detailed track list analyzes locally and exports a localized timeline with
   const textName = names.find((name) => name.endsWith("_timeline.txt"));
   const csvName = names.find((name) => name.endsWith("_timeline.csv"));
   expect(mp4Name).toBeDefined();
+  expect(mp4Name).toMatch(/_with-beat\.mp4$/);
   expect(textName).toBeDefined();
   expect(csvName).toBeDefined();
   const mp4 = files[mp4Name!];

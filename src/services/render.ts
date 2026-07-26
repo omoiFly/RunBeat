@@ -10,7 +10,7 @@ import { getRegisteredFile } from "./files";
 import { createRenderWorkerPool, prepareTrackClip, type AudioStretcher } from "./renderAudio";
 import { maximumInMemoryRenderBytes, recommendedRenderConcurrency } from "./clientPerformance";
 import { resolveExportEnabled } from "./exportSelection";
-import { exportBaseName } from "./exportNaming";
+import { exportBaseName, exportBeatDescriptor } from "./exportNaming";
 import { estimatedTrackGeometry, estimateProjectDuration, projectTimelineGeometry } from "./renderEstimate";
 import { StreamingZipBuilder } from "./streamingZip";
 import { createProjectTimeline, timelineAsCsv, timelineAsText, type ProjectTimeline } from "./timeline";
@@ -178,6 +178,7 @@ async function renderSeparateProject(
   tracks: Track[],
   project: ProjectV1,
   customBeatSample: ReturnType<typeof getCustomBeatSample>,
+  language: AppLanguage,
   jobId: string,
   onProgress: (progress: RenderProgress) => void,
   signal?: AbortSignal
@@ -190,6 +191,7 @@ async function renderSeparateProject(
   const workerPool = createRenderWorkerPool(concurrency, signal);
   const zip = new StreamingZipBuilder();
   const format = outputFormat(project);
+  const beatDescriptor = exportBeatDescriptor(project.exportSettings.includeBeat !== false, language);
   let durationSeconds = 0;
   try {
     for (let batchStart = 0; batchStart < tracks.length; batchStart += concurrency) {
@@ -223,7 +225,7 @@ async function renderSeparateProject(
           });
         });
         const safeName = track.source.fileName.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]/g, "_");
-        await zip.add(`${safeName}_${project.targetSpm}SPM.${format}`, encoded, signal);
+        await zip.add(`${safeName}_${project.targetSpm}SPM_${beatDescriptor}.${format}`, encoded, signal);
       }
     }
     onProgress({ jobId, stage: "encode", progress: 0.98, message: `打包 ${tracks.length} 首 ${format.toUpperCase()}` });
@@ -231,7 +233,7 @@ async function renderSeparateProject(
     onProgress({ jobId, stage: "qa", progress: 1, message: "完成" });
     return {
       blob,
-      fileName: `${exportBaseName(project.name, project.targetSpm, durationSeconds)}.zip`,
+      fileName: `${exportBaseName(project.name, project.targetSpm, durationSeconds, project.exportSettings.includeBeat !== false, language)}.zip`,
       durationSeconds
     };
   } finally {
@@ -328,7 +330,7 @@ export async function renderProject(
   const estimatedDuration = estimateProjectDuration(project);
   const estimatedWorkingBytes = estimatedDuration * project.exportSettings.sampleRate * 2 * 4;
   if (project.exportSettings.mode === "separate") {
-    return renderSeparateProject(tracks, project, customBeatSample, jobId, onProgress, signal);
+    return renderSeparateProject(tracks, project, customBeatSample, language, jobId, onProgress, signal);
   }
 
   const mixOptions = mixOptionsFor(project, customBeatSample);
@@ -388,7 +390,7 @@ export async function renderProject(
         message: format === "mp3" ? `编码 MP3（${project.exportSettings.mp3BitrateKbps ?? 192} kbps）` : "编码 WAV"
       });
     });
-  const baseName = exportBaseName(project.name, project.targetSpm, durationSeconds);
+  const baseName = exportBaseName(project.name, project.targetSpm, durationSeconds, includeBeat, language);
   if (timeline && project.exportSettings.includeTimeline) {
     onProgress({ jobId, stage: "encode", progress: 0.99, message: coverImage ? "流式打包视频与时间轴" : "流式打包音频与时间轴" });
     const archive = await addTimelineArchive(media, `${baseName}.${format}`, timeline, language, signal);

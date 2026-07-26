@@ -164,60 +164,57 @@ describe("project edit history", () => {
   });
 });
 
-describe("analysis cancellation", () => {
-  it("returns an interrupted new track to the waiting state", () => {
-    useProjectStore.setState((state) => ({
-      project: { ...state.project, tracks: [{ ...track("active", 0), status: "analyzing-bpm" }] },
-      busy: true,
-      analysisProgress: { active: 0.42 },
-      analysisTask: { kind: "add", trackIds: ["active"], settledTrackIds: [], total: 1 }
-    }));
-
-    useProjectStore.getState().cancelAnalysis();
-
-    expect(useProjectStore.getState()).toMatchObject({
-      busy: false,
-      analysisTask: undefined,
-      analysisProgress: {},
-      project: { tracks: [{ status: "queued" }] }
-    });
-  });
-
-  it("restores the previous result when reanalysis is canceled", () => {
+describe("sorting during analysis", () => {
+  it("keeps in-progress results and carries the new order into the analysis history snapshot", () => {
     const previousProject = {
       ...createProject(),
-      tracks: [{ ...track("active", 0), status: "complete" as const }]
+      tracks: [
+        { ...track("alpha", 0), status: "complete" as const },
+        { ...track("beta", 1), status: "complete" as const }
+      ]
     };
     useProjectStore.setState({
       project: {
         ...previousProject,
-        tracks: [{ ...previousProject.tracks[0], status: "analyzing-beats" }]
+        tracks: [
+          { ...previousProject.tracks[0], status: "analyzing-beats" },
+          previousProject.tracks[1]
+        ]
       },
-      revision: 12,
-      savedRevision: 11,
+      revision: 1,
+      savedRevision: 0,
       undoStack: [{
         project: previousProject,
-        revision: 11,
+        revision: 0,
         label: "重新分析歌曲",
         changedAt: Date.now()
       }],
       redoStack: [],
       isDirty: true,
       busy: true,
-      analysisProgress: { active: 0.7 },
-      analysisTask: { kind: "reanalyze", trackIds: ["active"], settledTrackIds: [], total: 1 }
+      analysisProgress: { alpha: 0.7, beta: 1 },
+      analysisTask: { trackIds: ["alpha", "beta"], settledTrackIds: ["beta"], total: 2 }
     });
 
-    useProjectStore.getState().cancelAnalysis();
+    useProjectStore.getState().reorderTracks(["beta", "alpha"]);
 
-    expect(useProjectStore.getState()).toMatchObject({
-      project: { tracks: [{ status: "complete" }] },
-      revision: 11,
-      isDirty: false,
-      undoStack: [],
-      busy: false,
-      analysisTask: undefined
-    });
+    const active = useProjectStore.getState();
+    expect([...active.project.tracks].sort((left, right) => left.order - right.order).map((item) => item.id))
+      .toEqual(["beta", "alpha"]);
+    expect(active.project.tracks.find((item) => item.id === "alpha")?.status).toBe("analyzing-beats");
+    expect(active.busy).toBe(true);
+    expect(active.analysisTask?.settledTrackIds).toEqual(["beta"]);
+    expect(active.undoStack).toHaveLength(1);
+    expect([...active.undoStack[0].project.tracks].sort((left, right) => left.order - right.order).map((item) => item.id))
+      .toEqual(["beta", "alpha"]);
+
+    useProjectStore.setState({ busy: false, analysisTask: undefined });
+    useProjectStore.getState().undo();
+    const restored = useProjectStore.getState();
+    expect([...restored.project.tracks].sort((left, right) => left.order - right.order).map((item) => item.id))
+      .toEqual(["beta", "alpha"]);
+    expect(restored.project.tracks.every((item) => item.status === "complete")).toBe(true);
+    expect(restored.isDirty).toBe(true);
   });
 });
 

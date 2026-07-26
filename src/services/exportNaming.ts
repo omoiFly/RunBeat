@@ -1,3 +1,5 @@
+import type { AppLanguage } from "../i18n";
+
 const FALLBACK_EXPORT_TITLE = "RunBeat";
 const MAX_EXPORT_TITLE_CHARACTERS = 80;
 
@@ -19,6 +21,17 @@ export function safeExportTitle(title: string): string {
   return shortened || FALLBACK_EXPORT_TITLE;
 }
 
-export function exportBaseName(projectTitle: string, targetSpm: number, durationSeconds: number): string {
-  return `${safeExportTitle(projectTitle)}_${targetSpm}SPM_${Math.max(1, Math.round(durationSeconds / 60))}min`;
+export function exportBeatDescriptor(includeBeat: boolean, language: AppLanguage): string {
+  if (language === "en") return includeBeat ? "with-beat" : "without-beat";
+  return includeBeat ? "带节拍" : "不带节拍";
+}
+
+export function exportBaseName(
+  projectTitle: string,
+  targetSpm: number,
+  durationSeconds: number,
+  includeBeat: boolean,
+  language: AppLanguage
+): string {
+  return `${safeExportTitle(projectTitle)}_${targetSpm}SPM_${Math.max(1, Math.round(durationSeconds / 60))}min_${exportBeatDescriptor(includeBeat, language)}`;
 }

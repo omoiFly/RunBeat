@@ -1,9 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { exportBaseName, safeExportTitle } from "./exportNaming";
+import { exportBaseName, exportBeatDescriptor, safeExportTitle } from "./exportNaming";
 
 describe("export naming", () => {
-  it("uses the readable project title in the exported base name", () => {
-    expect(exportBaseName("周二间歇跑", 180, 3_600)).toBe("周二间歇跑_180SPM_60min");
+  it("uses the readable project title and Chinese beat state in the exported base name", () => {
+    expect(exportBaseName("周二间歇跑", 180, 3_600, true, "zh-CN")).toBe("周二间歇跑_180SPM_60min_带节拍");
+    expect(exportBaseName("周二间歇跑", 180, 3_600, false, "zh-CN")).toBe("周二间歇跑_180SPM_60min_不带节拍");
+  });
+
+  it("uses an English beat state for English exports", () => {
+    expect(exportBeatDescriptor(true, "en")).toBe("with-beat");
+    expect(exportBeatDescriptor(false, "en")).toBe("without-beat");
   });
 
   it("removes unsafe filename characters and falls back for an empty title", () => {
