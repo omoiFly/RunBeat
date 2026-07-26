@@ -9,7 +9,7 @@ import { getCustomBeatSample } from "./customBeat";
 import { getRegisteredFile } from "./files";
 import { createRenderWorkerPool, prepareTrackClip, type AudioStretcher } from "./renderAudio";
 import { maximumInMemoryRenderBytes, recommendedRenderConcurrency } from "./clientPerformance";
-import { resolveExportEnabled } from "./exportSelection";
+import { MAX_EXPORT_TRACKS, resolveExportEnabled } from "./exportSelection";
 import { exportBaseName, exportBeatDescriptor } from "./exportNaming";
 import { estimatedTrackGeometry, estimateProjectDuration, projectTimelineGeometry } from "./renderEstimate";
 import { StreamingZipBuilder } from "./streamingZip";
@@ -319,6 +319,9 @@ export async function renderProject(
   }
   const selected = project.tracks.filter((track) => resolveExportEnabled(track, project.maxTempoChangePercent));
   if (!selected.length) throw new Error("没有勾选可导出的歌曲");
+  if (selected.length > MAX_EXPORT_TRACKS) {
+    throw new Error(`一次最多导出 ${MAX_EXPORT_TRACKS} 首歌曲，当前已勾选 ${selected.length} 首`);
+  }
   const unavailable = selected.find((track) => track.status === "missing" || !track.source.available);
   if (unavailable) throw new Error(`${unavailable.source.fileName} 需要重新关联原始文件`);
   const unfinished = selected.find((track) => track.status !== "complete" || !track.derivedAnalysis);

@@ -36,4 +36,13 @@ describe("runtime message translations", () => {
     render(<LanguageProvider><RuntimeMessage>{message}</RuntimeMessage></LanguageProvider>);
     expect(screen.getByText(expected)).toBeInTheDocument();
   });
+
+  it.each([
+    ["已过滤 2 首重复歌曲。", "Duplicate tracks skipped: 2."],
+    ["已过滤 2 首重复歌曲；没有其他可导入文件。", "Duplicate tracks skipped: 2; no other files can be imported."],
+    ["一次最多导出 50 首歌曲，当前已勾选 51 首", "You can export up to 50 tracks at a time; 51 tracks are currently selected."]
+  ])("translates duplicate import feedback: %s", (message, expected) => {
+    render(<LanguageProvider><RuntimeMessage>{message}</RuntimeMessage></LanguageProvider>);
+    expect(screen.getByText(expected)).toBeInTheDocument();
+  });
 });

@@ -251,6 +251,7 @@ const HELP_TOPICS = [
       {
         type: "bullets",
         items: [
+          "项目可保存任意数量的歌曲；为控制浏览器资源占用，一次最多导出 50 首。",
           "MP3 文件较小；WAV 为未压缩音频，体积更大。",
           "连续模式可以选择 JPG、PNG 或 WebP 封面，在本机生成 1920×1080 的 H.264 / AAC MP4；不选择图片时仍按普通音频导出。封面图片不会保存到项目或上传。",
           "“加入节拍轨”决定最终音频是否混入脚步提示，不影响歌曲的变速处理。",
@@ -370,7 +371,7 @@ export function AboutDialog({ open, onClose }: { open: boolean; onClose: () => v
             <div className="about-product-summary">
               <ClassicIcon name="app" size={32} />
               <div>
-                <h2>RunBeat 0.1.0</h2>
+                <h2>RunBeat 0.1.1</h2>
                 <p>{t("跑步音乐制作工具")}</p>
                 <p>{t("隐私优先：所有音频分析与处理均在您的设备本地完成，文件不会上传。")}</p>
                 <p title="SPDX: AGPL-3.0-or-later">GNU AGPL v3+</p>

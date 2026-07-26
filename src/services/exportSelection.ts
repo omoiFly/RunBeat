@@ -3,6 +3,8 @@ import { isTempoChangeWithinRange } from "../domain/tempoChange";
 
 type SelectionTrack = Pick<Track, "edit" | "derivedAnalysis">;
 
+export const MAX_EXPORT_TRACKS = 50;
+
 /**
  * 根据当前变速范围计算一次性的默认选择。
  *

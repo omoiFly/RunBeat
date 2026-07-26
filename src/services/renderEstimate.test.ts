@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createProject, type Track } from "../domain/types";
+import { MAX_EXPORT_TRACKS } from "./exportSelection";
 import { estimateProjectDuration } from "./renderEstimate";
 
 function makeTrack(index: number, seconds = 240): Track {
@@ -41,11 +42,14 @@ describe("export duration estimate", () => {
     expect(estimateProjectDuration(project)).toBeCloseTo(3 * 240 - 2 * transitionSeconds, 4);
   });
 
-  it("calculates the combined final duration for all fifty supported tracks", () => {
+  it("calculates the combined final duration for the maximum export batch", () => {
     const project = createProject();
-    project.tracks = Array.from({ length: 50 }, (_, index) => makeTrack(index));
+    project.tracks = Array.from({ length: MAX_EXPORT_TRACKS }, (_, index) => makeTrack(index));
     const transitionSeconds = project.transitionBars * 4 * 60 / project.targetSpm;
-    expect(estimateProjectDuration(project)).toBeCloseTo(50 * 240 - 49 * transitionSeconds, 4);
+    expect(estimateProjectDuration(project)).toBeCloseTo(
+      MAX_EXPORT_TRACKS * 240 - (MAX_EXPORT_TRACKS - 1) * transitionSeconds,
+      4
+    );
   });
 
   it("reports the sum of individual outputs in separate mode", () => {

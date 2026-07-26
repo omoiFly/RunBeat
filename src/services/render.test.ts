@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createProject, type Track } from "../domain/types";
-import { defaultExportEnabled, resolveExportEnabled } from "./exportSelection";
+import { defaultExportEnabled, MAX_EXPORT_TRACKS, resolveExportEnabled } from "./exportSelection";
 import { isTrackIncluded, renderChunkedContinuousWav, renderProject } from "./render";
 import { projectTimelineGeometry } from "./renderEstimate";
 
@@ -85,6 +85,22 @@ describe("export selection", () => {
   it("reports an actionable error when no checked track is renderable", async () => {
     const project = createProject();
     await expect(renderProject(project, () => undefined)).rejects.toThrow("没有勾选可导出的歌曲");
+  });
+
+  it("rejects export batches above fifty tracks", async () => {
+    const project = createProject();
+    project.tracks = Array.from({ length: MAX_EXPORT_TRACKS + 1 }, (_, index) => {
+      const track = makeTrack(0, { exportEnabled: true });
+      return {
+        ...track,
+        id: `track-${index}`,
+        source: { ...track.source, id: `track-${index}`, fileName: `track-${index}.wav` },
+        order: index
+      };
+    });
+
+    await expect(renderProject(project, () => undefined))
+      .rejects.toThrow(`一次最多导出 ${MAX_EXPORT_TRACKS} 首歌曲，当前已勾选 ${MAX_EXPORT_TRACKS + 1} 首`);
   });
 
   it("requires a session copy of a selected custom beat sample", async () => {

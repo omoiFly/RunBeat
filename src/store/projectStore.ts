@@ -480,6 +480,31 @@ function projectAfterTrackChange(project: ProjectV1, tracks: Track[]): ProjectV1
   };
 }
 
+function fileIdentity(fileName: string, fileSize: number, lastModified: number): string {
+  return JSON.stringify([fileName, fileSize, lastModified]);
+}
+
+function filterDuplicateTrackFiles(selected: File[], project: ProjectV1): {
+  files: File[];
+  duplicateCount: number;
+} {
+  const seen = new Set(project.tracks.map((track) =>
+    fileIdentity(track.source.fileName, track.source.fileSize, track.source.lastModified)
+  ));
+  const files: File[] = [];
+  let duplicateCount = 0;
+  for (const file of selected) {
+    const identity = fileIdentity(file.name, file.size, file.lastModified);
+    if (seen.has(identity)) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.add(identity);
+    files.push(file);
+  }
+  return { files, duplicateCount };
+}
+
 function projectWithTrackOrder(project: ProjectV1, orderedIds: string[]): ProjectV1 {
   const availableIds = new Set(project.tracks.map((track) => track.id));
   const seen = new Set<string>();
@@ -667,10 +692,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       set({ notice: "正在分析其他歌曲，请等待当前任务完成。" });
       return;
     }
-    const remaining = Math.max(0, 50 - current.tracks.length);
-    const files = selected.slice(0, remaining).filter((file) => file.size <= 300 * 1024 * 1024);
+    const filtered = filterDuplicateTrackFiles(selected, current);
+    const files = filtered.files
+      .filter((file) => file.size <= 300 * 1024 * 1024);
+    const duplicateNotice = filtered.duplicateCount
+      ? `已过滤 ${filtered.duplicateCount} 首重复歌曲。`
+      : undefined;
     if (!files.length) {
-      set({ notice: "没有可导入的文件；单个文件上限为 300 MB，项目最多 50 首。" });
+      set({
+        notice: filtered.duplicateCount
+          ? `已过滤 ${filtered.duplicateCount} 首重复歌曲；没有其他可导入文件。`
+          : "没有可导入的文件；单个文件上限为 300 MB。"
+      });
       return;
     }
     const firstNewOrder = current.tracks.reduce((highest, track) => Math.max(highest, track.order), -1) + 1;
@@ -720,7 +753,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             trackIds: combinedTrackIds,
             settledTrackIds: state.analysisTask?.settledTrackIds ?? [],
             total: combinedTrackIds.length
-          }
+          },
+          notice: duplicateNotice
         };
       });
       if (!appended) return;
@@ -738,7 +772,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...state.analysisProgress,
         ...Object.fromEntries(trackIds.map((trackId) => [trackId, 0]))
       },
-      analysisTask: { trackIds, settledTrackIds: [], total: trackIds.length }
+      analysisTask: { trackIds, settledTrackIds: [], total: trackIds.length },
+      notice: duplicateNotice
     }));
     prefetchRubberBandForPreview();
     await startAnalysisSession({

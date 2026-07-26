@@ -3,7 +3,7 @@ import { useMemo, useRef, useState, type ChangeEvent } from "react";
 import type { ExportSettings, ProjectV1 } from "../../domain/types";
 import { useI18n } from "../../i18n";
 import { COVER_IMAGE_ACCEPT, coverImageValidationError } from "../../services/coverVideo";
-import { resolveExportEnabled } from "../../services/exportSelection";
+import { MAX_EXPORT_TRACKS, resolveExportEnabled } from "../../services/exportSelection";
 import { isTrackIncluded } from "../../services/render";
 import { estimateProjectDuration } from "../../services/renderEstimate";
 import { formatTimelineTimestamp } from "../../services/timeline";
@@ -59,7 +59,8 @@ export function ExportWizard({
   const exportProject = useMemo<ProjectV1>(() => ({ ...project, exportSettings: settings }), [project, settings]);
   const selectedTracks = exportProject.tracks.filter((track) => resolveExportEnabled(track, exportProject.maxTempoChangePercent));
   const readyTracks = selectedTracks.filter((track) => isTrackIncluded(track, exportProject));
-  const canExport = readyTracks.length > 0;
+  const exportLimitExceeded = selectedTracks.length > MAX_EXPORT_TRACKS;
+  const canExport = readyTracks.length > 0 && !exportLimitExceeded;
   const estimatedDuration = estimateProjectDuration(exportProject);
   const rendering = renderState.status === "rendering";
   const progress = renderState.progress?.progress ?? 0;
@@ -229,7 +230,11 @@ export function ExportWizard({
                   <dt>{t("目标步频:")}</dt><dd>{project.targetSpm} SPM</dd>
                   <dt>{t("预计时长:")}</dt><dd>{formatTimelineTimestamp(estimatedDuration)}</dd>
                 </dl>
-                {!canExport && <p className="wizard-error"><ClassicIcon name="warning" />{t("没有可导出的歌曲。请取消向导并在歌曲列表中勾选至少一首分析完成的歌曲。")}</p>}
+                {readyTracks.length === 0 && <p className="wizard-error"><ClassicIcon name="warning" />{t("没有可导出的歌曲。请取消向导并在歌曲列表中勾选至少一首分析完成的歌曲。")}</p>}
+                {exportLimitExceeded && <p className="wizard-error"><ClassicIcon name="warning" />{t(
+                  "一次最多导出 {limit} 首歌曲。当前已勾选 {count} 首，请取消向导并调整导出选择。",
+                  { limit: MAX_EXPORT_TRACKS, count: selectedTracks.length }
+                )}</p>}
                 {selectedTracks.length !== readyTracks.length && <p className="wizard-warning"><ClassicIcon name="warning" />{t("{count} 首所选歌曲尚未就绪，不会导出。", { count: selectedTracks.length - readyTracks.length })}</p>}
               </fieldset>}
             </div>

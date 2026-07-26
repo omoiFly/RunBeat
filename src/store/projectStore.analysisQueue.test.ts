@@ -66,13 +66,16 @@ describe("adding tracks during analysis", () => {
       file.name === "first.wav" ? firstDecode : Promise.resolve(decoded)
     );
 
-    const firstImport = useProjectStore.getState().addFiles([
-      new File(["first"], "first.wav", { type: "audio/wav" })
-    ]);
+    const firstFile = new File(["first"], "first.wav", {
+      type: "audio/wav",
+      lastModified: 100
+    });
+    const firstImport = useProjectStore.getState().addFiles([firstFile]);
     await vi.waitFor(() => expect(mocks.decodeFile).toHaveBeenCalledTimes(1));
 
     const secondImport = useProjectStore.getState().addFiles([
-      new File(["second"], "second.wav", { type: "audio/wav" })
+      new File(["first"], "first.wav", { type: "audio/wav", lastModified: 100 }),
+      new File(["second"], "second.wav", { type: "audio/wav", lastModified: 200 })
     ]);
     const active = useProjectStore.getState();
     expect(active.busy).toBe(true);
@@ -84,6 +87,7 @@ describe("adding tracks during analysis", () => {
       total: 2,
       settledTrackIds: []
     });
+    expect(active.notice).toBe("已过滤 1 首重复歌曲。");
     expect(active.analysisTask?.trackIds).toHaveLength(2);
     expect(mocks.decodeFile).toHaveBeenCalledTimes(1);
 
@@ -103,5 +107,70 @@ describe("adding tracks during analysis", () => {
 
     useProjectStore.getState().undo();
     expect(useProjectStore.getState().project.tracks).toHaveLength(0);
+  });
+
+  it("filters repeats from the same selection and from the existing track list", async () => {
+    mocks.decodeFile.mockResolvedValue(decoded);
+    const first = new File(["same"], "same.wav", {
+      type: "audio/wav",
+      lastModified: 100
+    });
+    const firstDuplicate = new File(["same"], "same.wav", {
+      type: "audio/wav",
+      lastModified: 100
+    });
+
+    await useProjectStore.getState().addFiles([first, firstDuplicate]);
+
+    let state = useProjectStore.getState();
+    expect(state.project.tracks).toHaveLength(1);
+    expect(state.notice).toBe("已过滤 1 首重复歌曲。");
+    expect(mocks.decodeFile).toHaveBeenCalledTimes(1);
+
+    const changedFile = new File(["changed"], "same.wav", {
+      type: "audio/wav",
+      lastModified: 200
+    });
+    await useProjectStore.getState().addFiles([
+      new File(["same"], "same.wav", { type: "audio/wav", lastModified: 100 }),
+      changedFile
+    ]);
+
+    state = useProjectStore.getState();
+    expect(state.project.tracks.map((track) => [
+      track.source.fileName,
+      track.source.fileSize,
+      track.source.lastModified
+    ])).toEqual([
+      ["same.wav", first.size, 100],
+      ["same.wav", changedFile.size, 200]
+    ]);
+    expect(state.notice).toBe("已过滤 1 首重复歌曲。");
+    expect(mocks.decodeFile).toHaveBeenCalledTimes(2);
+
+    await useProjectStore.getState().addFiles([
+      new File(["same"], "same.wav", { type: "audio/wav", lastModified: 100 })
+    ]);
+    state = useProjectStore.getState();
+    expect(state.project.tracks).toHaveLength(2);
+    expect(state.notice).toBe("已过滤 1 首重复歌曲；没有其他可导入文件。");
+    expect(mocks.decodeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a project to import more than fifty unique tracks", async () => {
+    mocks.decodeFile.mockResolvedValue(decoded);
+    const files = Array.from({ length: 51 }, (_, index) => new File(
+      [`track-${index}`],
+      `track-${index}.wav`,
+      { type: "audio/wav", lastModified: index + 1 }
+    ));
+
+    await useProjectStore.getState().addFiles(files);
+
+    const state = useProjectStore.getState();
+    expect(state.project.tracks).toHaveLength(51);
+    expect(state.project.tracks.at(-1)?.source.fileName).toBe("track-50.wav");
+    expect(mocks.decodeFile).toHaveBeenCalledTimes(51);
+    expect(state.notice).toBeUndefined();
   });
 });

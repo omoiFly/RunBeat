@@ -5,7 +5,7 @@
   <p>Local-first running music builder with beat analysis, pitch-preserving time stretch and MP3/WAV/cover-video export.</p>
 
   <p>
-    <a href="./package.json"><img src="https://img.shields.io/badge/version-0.1.0-008080" alt="Version 0.1.0"></a>
+    <a href="./package.json"><img src="https://img.shields.io/badge/version-0.1.1-008080" alt="Version 0.1.1"></a>
     <a href="./LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-0050a4" alt="License: AGPL-3.0-or-later"></a>
     <img src="https://img.shields.io/badge/audio_processing-local_only-2e8b57" alt="Audio processing: local only">
   </p>
@@ -21,7 +21,7 @@ RunBeat 是一款本地优先的跑步音乐制作工具。导入歌曲并设置
 ![RunBeat Windows 98 风格制作台，已完成一段合成演示节拍的分析](./docs/images/runbeat-studio.png)
 
 > [!NOTE]
-> RunBeat 当前处于 `0.1.0` 早期版本。它更适合节拍稳定的流行、电子、摇滚和
+> RunBeat 当前处于 `0.1.1` 早期版本。它更适合节拍稳定的流行、电子、摇滚和
 > Hip-Hop 音乐；现场录音、自由速度音乐或中途明显变速的歌曲可能需要手动校准。
 
 ## 主要功能

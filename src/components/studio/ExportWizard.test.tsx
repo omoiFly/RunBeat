@@ -191,4 +191,46 @@ describe("export content choices", () => {
     expect(screen.getByRole("group", { name: "音频格式" })).toBeVisible();
     expect(screen.queryByLabelText("封面图片:")).not.toBeInTheDocument();
   });
+
+  it("shows and enforces the fifty-track export limit", () => {
+    const project = createExportableProject();
+    const template = project.tracks[0];
+    project.tracks = Array.from({ length: 51 }, (_, index) => ({
+      ...template,
+      id: `track-${index}`,
+      source: {
+        ...template.source,
+        id: `source-${index}`,
+        fileName: `song-${index}.wav`,
+        lastModified: index + 1
+      },
+      order: index
+    }));
+    const onStart = vi.fn();
+
+    render(
+      <LanguageProvider>
+        <ExportWizard
+          open
+          project={project}
+          renderState={{ status: "idle" }}
+          onSettings={vi.fn()}
+          onStart={onStart}
+          onCancelRender={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </LanguageProvider>
+    );
+
+    for (let page = 0; page < 3; page += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "下一步 >" }));
+    }
+
+    expect(screen.getByText("一次最多导出 50 首歌曲。当前已勾选 51 首，请取消向导并调整导出选择。")).toBeVisible();
+    expect(screen.queryByText(/没有可导出的歌曲/)).not.toBeInTheDocument();
+    const finish = screen.getByRole("button", { name: "完成" });
+    expect(finish).toBeDisabled();
+    fireEvent.click(finish);
+    expect(onStart).not.toHaveBeenCalled();
+  });
 });

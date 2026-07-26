@@ -200,6 +200,8 @@ const HELP_ENGLISH: Record<string, string> = {
   "导出音频与时间轴": "Audio Export and Timelines",
   "按 Ctrl+E 打开导出向导。连续模式生成一条按列表顺序衔接的混音；分别导出模式为每首所选歌曲生成独立文件。":
     "Press Ctrl+E to open the Export Wizard. Continuous mode creates one mix in list order; separate mode creates one file for each selected track.",
+  "项目可保存任意数量的歌曲；为控制浏览器资源占用，一次最多导出 50 首。":
+    "A project can store any number of tracks. To control browser resource usage, each export is limited to 50 tracks.",
   "MP3 文件较小；WAV 为未压缩音频，体积更大。":
     "MP3 files are smaller; WAV is uncompressed and larger.",
   "连续模式可以选择 JPG、PNG 或 WebP 封面，在本机生成 1920×1080 的 H.264 / AAC MP4；不选择图片时仍按普通音频导出。封面图片不会保存到项目或上传。":
@@ -609,6 +611,8 @@ const ENGLISH: Record<string, string> = {
   "{count} 首": "{count}",
   "没有可导出的歌曲。请取消向导并在歌曲列表中勾选至少一首分析完成的歌曲。":
     "There are no exportable tracks. Cancel the wizard and select at least one analyzed track in the track list.",
+  "一次最多导出 {limit} 首歌曲。当前已勾选 {count} 首，请取消向导并调整导出选择。":
+    "You can export up to {limit} tracks at a time. {count} tracks are currently selected; cancel the wizard and adjust the export selection.",
   "{count} 首所选歌曲尚未就绪，不会导出。": "{count} selected tracks are not ready and will not be exported.",
   "< 上一步": "< Back",
   "下一步 >": "Next >",
@@ -715,6 +719,9 @@ function translateRuntimeMessage(message: string, language: AppLanguage): string
     [/^已重做上一步操作。$/, "Redid the last action."],
     [/^(\d+) 首歌曲缺少原始文件，已跳过。$/, "$1 tracks were skipped because their original files are missing."],
     [/^重新分析完成：(\d+)\/(\d+) 首歌曲成功。$/, "Reanalysis complete: $1/$2 tracks succeeded."],
+    [/^已过滤 (\d+) 首重复歌曲。$/, "Duplicate tracks skipped: $1."],
+    [/^已过滤 (\d+) 首重复歌曲；没有其他可导入文件。$/, "Duplicate tracks skipped: $1; no other files can be imported."],
+    [/^一次最多导出 (\d+) 首歌曲，当前已勾选 (\d+) 首$/, "You can export up to $1 tracks at a time; $2 tracks are currently selected."],
     [/^没有找到这个本地项目，已创建新项目。$/, "The local project was not found. A new project was created."],
     [/^请先重新关联 (.+) 的原始文件，再重新分析。$/, "Relink the original file for $1 before reanalyzing."],
     [/^(.+) 已重新分析。$/, "$1 was reanalyzed."],
