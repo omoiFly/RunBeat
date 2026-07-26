@@ -25,7 +25,10 @@ const track: Track = {
   order: 0
 };
 
-function renderTable(onPreview: (id: string, mode: "processed" | "processed-beat") => void) {
+function renderTable(
+  onPreview: (id: string, mode: "processed" | "processed-beat") => void,
+  options: { onSort?: (key: string) => void; sortKey?: "filename"; sortDirection?: "asc" | "desc" } = {}
+) {
   render(
     <LanguageProvider>
       <MatchTable
@@ -40,7 +43,9 @@ function renderTable(onPreview: (id: string, mode: "processed" | "processed-beat
         onReorder={vi.fn()}
         onPreview={onPreview}
         onShowProperties={vi.fn()}
-        onSort={vi.fn()}
+        onSort={options.onSort ?? vi.fn()}
+        sortKey={options.sortKey}
+        sortDirection={options.sortDirection}
       />
     </LanguageProvider>
   );
@@ -77,5 +82,27 @@ describe("track list preview actions", () => {
     fireEvent.keyDown(screen.getByRole("grid"), { key: "Enter" });
 
     expect(onPreview).toHaveBeenCalledWith(track.id, "processed-beat");
+  });
+});
+
+describe("track list columns", () => {
+  beforeEach(() => localStorage.clear());
+  afterEach(cleanup);
+
+  it("shows the active sort direction on the selected column", () => {
+    renderTable(vi.fn(), { sortKey: "filename", sortDirection: "desc" });
+
+    expect(screen.getByRole("columnheader", { name: /歌曲/ })).toHaveAttribute("aria-sort", "descending");
+    expect(screen.getByText("▼")).toBeInTheDocument();
+  });
+
+  it("resizes a column with the keyboard and persists the width", () => {
+    renderTable(vi.fn());
+
+    fireEvent.keyDown(screen.getByRole("separator", { name: "调整“歌曲”列宽" }), { key: "ArrowRight" });
+
+    expect(JSON.parse(localStorage.getItem("runbeat.track-column-widths.v1") ?? "{}")).toMatchObject({
+      filename: 308
+    });
   });
 });

@@ -75,6 +75,8 @@ const track: Track = {
   status: "complete",
   rawAnalysis: {
     rawBpm: 120,
+    rhythmBpm: 121,
+    bpmConfidence: 0.73,
     beatTicks: [0, 0.5, 1],
     bpmIntervals: [0.5, 0.5],
     windowBpms: [120],
@@ -91,7 +93,16 @@ const track: Track = {
     timeRatio: 1,
     tempoChangePercent: 0,
     phaseOffsetSeconds: 0.1,
+    phaseAlignmentModel: "global-bpm",
+    phaseConfidence: 0.75,
+    phaseCoverage: 0.84,
+    phaseMedianErrorMs: 20,
     quality: "good",
+    qualityFactors: {
+      tempoChange: "excellent",
+      bpmConfidence: "good",
+      phaseAlignment: "good"
+    },
     warnings: []
   },
   edit: {
@@ -150,16 +161,83 @@ describe("Inspector", () => {
     expect(onReanalyze).toHaveBeenCalledOnce();
   });
 
+  it("shows quality factors and phase metrics directly in analysis results", () => {
+    render(
+      <LanguageProvider>
+        <Inspector
+          project={createProject("Test")}
+          track={track}
+          busy={false}
+          onTrackEdit={vi.fn()}
+          onReanalyze={vi.fn()}
+        />
+      </LanguageProvider>
+    );
+
+    const analysis = screen.getByText("分析结果").closest("fieldset");
+    expect(analysis).toHaveTextContent("BPM 置信度:");
+    expect(analysis).toHaveTextContent("73%");
+    expect(analysis).toHaveTextContent("可靠拍点覆盖:");
+    expect(analysis).toHaveTextContent("84%");
+    expect(analysis).toHaveTextContent("拍点中位误差:");
+    expect(analysis).toHaveTextContent("20 ms");
+
+    const quality = screen.getByText("综合质量计算").closest("fieldset");
+    expect(quality).toHaveTextContent("置信度 75% · 覆盖 84% · 误差 20 ms");
+    expect(quality).not.toHaveTextContent("决定项");
+    expect(quality).not.toHaveTextContent("综合质量取");
+    expect(quality).not.toHaveTextContent("良好范围：60% ～ 79%");
+    expect(quality).not.toHaveTextContent("良好：置信度 ≥72%");
+  });
+
+  it("integrates quality warnings into factor advice and keeps only independent warnings separate", () => {
+    const qualityWarning = "歌曲拍点相位一致性一般，综合质量已降级，建议试听确认";
+    render(
+      <LanguageProvider>
+        <Inspector
+          project={createProject("Test")}
+          track={{
+            ...track,
+            derivedAnalysis: {
+              ...track.derivedAnalysis!,
+              quality: "acceptable",
+              qualityFactors: {
+                tempoChange: "excellent",
+                bpmConfidence: "good",
+                phaseAlignment: "acceptable"
+              },
+              warnings: [qualityWarning, "源文件响度异常"]
+            }
+          }}
+          busy={false}
+          onTrackEdit={vi.fn()}
+          onReanalyze={vi.fn()}
+        />
+      </LanguageProvider>
+    );
+
+    const quality = screen.getByText("综合质量计算").closest("fieldset");
+    expect(quality).toHaveTextContent("建议: 试听确认");
+    expect(quality).not.toHaveTextContent("决定项");
+    expect(screen.queryByText(qualityWarning)).not.toBeInTheDocument();
+
+    const warnings = screen.getByText("警告").closest("fieldset");
+    expect(warnings).toHaveTextContent("源文件响度异常");
+    expect(warnings).not.toHaveTextContent("综合质量已降级");
+  });
+
   it("reflects preparing, buffering, and playing session states", async () => {
     renderInspector();
+    expect(screen.getByRole("group", { name: "试听控制" })).toContainElement(screen.getByRole("status"));
+    expect(screen.getByRole("status")).toHaveTextContent("已停止");
     fireEvent.click(screen.getByRole("button", { name: "原始音频" }));
-    expect(screen.getByRole("status")).toHaveTextContent("正在准备试听片段...");
+    expect(screen.getByRole("status")).toHaveTextContent("准备中");
 
     await waitFor(() => expect(previewMocks.startPreview).toHaveBeenCalledOnce());
     previewMocks.emit({ status: "buffering" });
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("正在缓冲试听..."));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("缓冲中"));
     previewMocks.emit({ status: "playing", sourcePositionSeconds: 3.2 });
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("试听中"));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("播放中"));
     expect(screen.getByRole("slider")).toHaveValue("3.2");
   });
 

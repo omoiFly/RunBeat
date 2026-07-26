@@ -47,7 +47,10 @@ export function ProjectsPage() {
   useEffect(() => {
     const onCommand = (event: Event) => {
       const command = (event as CustomEvent<AppCommand>).detail;
-      if (command === "new-project") navigate(`/studio?new=${Date.now()}`);
+      if (command.startsWith("open-recent-project:")) {
+        const projectId = command.slice("open-recent-project:".length);
+        if (projectId) navigate(`/studio?project=${encodeURIComponent(projectId)}`);
+      } else if (command === "new-project") navigate(`/studio?new=${Date.now()}`);
       else if (command === "open-project") openSelected();
       else if (command === "close-project") navigate("/studio");
       else if (command === "delete-project" && selected) setPendingDelete(selected);

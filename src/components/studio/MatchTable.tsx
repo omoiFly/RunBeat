@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { ClassicIcon } from "../ClassicIcon";
 import { QUALITY_LABELS, type Track } from "../../domain/types";
 import { useI18n } from "../../i18n";
@@ -21,6 +21,7 @@ type OptionalColumnId = Exclude<TableColumnId, "export" | "filename">;
 export type TrackListPreviewMode = "processed" | "processed-beat";
 
 const COLUMN_PREFS_KEY = "runbeat.track-columns.v1";
+const COLUMN_WIDTHS_PREFS_KEY = "runbeat.track-column-widths.v1";
 const OPTIONAL_COLUMNS: ReadonlyArray<{ id: OptionalColumnId; label: string }> = [
   { id: "status", label: "状态" },
   { id: "raw-bpm", label: "原始 BPM" },
@@ -32,6 +33,31 @@ const OPTIONAL_COLUMNS: ReadonlyArray<{ id: OptionalColumnId; label: string }> =
   { id: "quality", label: "综合质量" }
 ];
 const OPTIONAL_COLUMN_IDS = new Set<OptionalColumnId>(OPTIONAL_COLUMNS.map(({ id }) => id));
+const DEFAULT_COLUMN_WIDTHS: Record<TableColumnId, number> = {
+  export: 72,
+  filename: 300,
+  status: 110,
+  "raw-bpm": 100,
+  "mapped-bpm": 100,
+  "beat-count": 75,
+  "phase-accuracy": 140,
+  "tempo-change": 125,
+  duration: 130,
+  quality: 120
+};
+const MIN_COLUMN_WIDTHS: Record<TableColumnId, number> = {
+  export: 60,
+  filename: 160,
+  status: 76,
+  "raw-bpm": 76,
+  "mapped-bpm": 82,
+  "beat-count": 62,
+  "phase-accuracy": 96,
+  "tempo-change": 84,
+  duration: 90,
+  quality: 84
+};
+const MAX_COLUMN_WIDTH = 480;
 
 function isOptionalColumn(id: TableColumnId): id is OptionalColumnId {
   return OPTIONAL_COLUMN_IDS.has(id as OptionalColumnId);
@@ -47,6 +73,25 @@ function readVisibleColumns(): Set<OptionalColumnId> {
     // Fall through to the complete default layout.
   }
   return new Set(OPTIONAL_COLUMNS.map(({ id }) => id));
+}
+
+function readColumnWidths(): Record<TableColumnId, number> {
+  try {
+    const stored = JSON.parse(localStorage.getItem(COLUMN_WIDTHS_PREFS_KEY) ?? "{}") as Record<string, unknown>;
+    return Object.fromEntries(
+      (Object.keys(DEFAULT_COLUMN_WIDTHS) as TableColumnId[]).map((column) => {
+        const width = Number(stored[column]);
+        return [
+          column,
+          Number.isFinite(width)
+            ? Math.max(MIN_COLUMN_WIDTHS[column], Math.min(MAX_COLUMN_WIDTH, Math.round(width)))
+            : DEFAULT_COLUMN_WIDTHS[column]
+        ];
+      })
+    ) as Record<TableColumnId, number>;
+  } catch {
+    return { ...DEFAULT_COLUMN_WIDTHS };
+  }
 }
 
 function statusLabel(track: Track, t: Translate): string {
@@ -114,7 +159,10 @@ export function MatchTable({
   onReorder,
   onPreview,
   onShowProperties,
-  onSort
+  onSort,
+  sortKey,
+  sortDirection = "asc",
+  busy = false
 }: {
   tracks: Track[];
   selectedIds: Set<string>;
@@ -128,6 +176,9 @@ export function MatchTable({
   onPreview: (id: string, mode: TrackListPreviewMode) => void;
   onShowProperties: () => void;
   onSort: (key: SortableColumnId) => void;
+  sortKey?: SortableColumnId;
+  sortDirection?: "asc" | "desc";
+  busy?: boolean;
 }) {
   const { t, translateMessage } = useI18n();
   const ordered = useMemo(() => [...tracks].sort((a, b) => a.order - b.order), [tracks]);
@@ -139,6 +190,13 @@ export function MatchTable({
   const [contextMenu, setContextMenu] = useState<ContextMenuState>();
   const [columnMenu, setColumnMenu] = useState<ColumnMenuState>();
   const [visibleColumns, setVisibleColumns] = useState<Set<OptionalColumnId>>(readVisibleColumns);
+  const [columnWidths, setColumnWidthsState] = useState<Record<TableColumnId, number>>(readColumnWidths);
+  const [columnResize, setColumnResize] = useState<{ column: TableColumnId; pointerId: number; startX: number; startWidth: number }>();
+  const visibleColumnIds = useMemo<TableColumnId[]>(
+    () => ["export", "filename", ...OPTIONAL_COLUMNS.map(({ id }) => id).filter((id) => visibleColumns.has(id))],
+    [visibleColumns]
+  );
+  const tableMinWidth = visibleColumnIds.reduce((total, column) => total + columnWidths[column], 0);
 
   useEffect(() => {
     if (!contextMenu && !columnMenu) return;
@@ -209,6 +267,63 @@ export function MatchTable({
     }
   };
 
+  const persistColumnWidths = (widths: Record<TableColumnId, number>) => {
+    try {
+      localStorage.setItem(COLUMN_WIDTHS_PREFS_KEY, JSON.stringify(widths));
+    } catch {
+      // Column widths remain session-local when storage is unavailable.
+    }
+  };
+
+  const updateColumnWidth = (column: TableColumnId, width: number, persist = false) => {
+    setColumnWidthsState((current) => {
+      const next = {
+        ...current,
+        [column]: Math.max(MIN_COLUMN_WIDTHS[column], Math.min(MAX_COLUMN_WIDTH, Math.round(width)))
+      };
+      if (persist) persistColumnWidths(next);
+      return next;
+    });
+  };
+
+  const beginColumnResize = (column: TableColumnId, event: ReactPointerEvent<HTMLSpanElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setColumnResize({
+      column,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: columnWidths[column]
+    });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const moveColumnResize = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const resizing = columnResize;
+    if (!resizing || resizing.pointerId !== event.pointerId) return;
+    updateColumnWidth(resizing.column, resizing.startWidth + event.clientX - resizing.startX);
+  };
+
+  const endColumnResize = (event: ReactPointerEvent<HTMLSpanElement>) => {
+    const resizing = columnResize;
+    if (!resizing || resizing.pointerId !== event.pointerId) return;
+    updateColumnWidth(resizing.column, resizing.startWidth + event.clientX - resizing.startX, true);
+    setColumnResize(undefined);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resizeColumnWithKeyboard = (column: TableColumnId, event: KeyboardEvent<HTMLSpanElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const width = event.key === "Home"
+      ? DEFAULT_COLUMN_WIDTHS[column]
+      : columnWidths[column] + (event.key === "ArrowRight" ? 8 : -8);
+    updateColumnWidth(column, width, true);
+  };
+
   const toggleColumn = (column: OptionalColumnId) => {
     const next = new Set(visibleColumns);
     if (next.has(column)) next.delete(column);
@@ -241,6 +356,47 @@ export function MatchTable({
     }
   });
 
+  const renderHeader = (column: TableColumnId, label: string, sortable: boolean) => {
+    const sorted = sortable && sortKey === column;
+    return <th
+      {...headerProps(column)}
+      className={column === "export" ? "export-column" : undefined}
+      aria-sort={sortable ? sorted ? sortDirection === "asc" ? "ascending" : "descending" : "none" : undefined}
+      aria-disabled={sortable && busy ? true : undefined}
+      onClick={sortable && !busy ? () => onSort(column as SortableColumnId) : undefined}
+    >
+      <span className="column-header-content">
+        <span>{label}</span>
+        {sorted && <span className="column-sort-indicator" aria-hidden="true">{sortDirection === "asc" ? "▲" : "▼"}</span>}
+      </span>
+      <span
+        className="column-resize-handle"
+        role="separator"
+        aria-label={t("调整“{column}”列宽", { column: label })}
+        aria-orientation="vertical"
+        aria-valuemin={MIN_COLUMN_WIDTHS[column]}
+        aria-valuemax={MAX_COLUMN_WIDTH}
+        aria-valuenow={columnWidths[column]}
+        tabIndex={0}
+        onClick={(event) => event.stopPropagation()}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onPointerDown={(event) => beginColumnResize(column, event)}
+        onPointerMove={moveColumnResize}
+        onPointerUp={endColumnResize}
+        onPointerCancel={endColumnResize}
+        onDoubleClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          updateColumnWidth(column, DEFAULT_COLUMN_WIDTHS[column], true);
+        }}
+        onKeyDown={(event) => resizeColumnWithKeyboard(column, event)}
+      />
+    </th>;
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTableElement>) => {
     if (!ordered.length) return;
     const currentIndex = Math.max(0, ordered.findIndex((track) => track.id === focusedId));
@@ -264,14 +420,14 @@ export function MatchTable({
         onSelectionChange(new Set([nextId]), nextId);
       }
       window.requestAnimationFrame(() => document.querySelector<HTMLTableRowElement>(`tr[data-track-id="${CSS.escape(nextId)}"]`)?.focus());
-    } else if (event.key === " " && selectedIds.size) {
+    } else if (event.key === " " && selectedIds.size && !busy) {
       event.preventDefault();
       const allEnabled = [...selectedIds].every((id) => tracks.find((track) => track.id === id)?.edit.exportEnabled);
       onExportEnabled([...selectedIds], !allEnabled);
     } else if (event.key === "Enter" && focusedId) {
       event.preventDefault();
       onPreview(focusedId, "processed-beat");
-    } else if (event.key === "Delete" && selectedIds.size) {
+    } else if (event.key === "Delete" && selectedIds.size && !busy) {
       event.preventDefault();
       onDelete();
     } else if (event.shiftKey && event.key === "F10" && focusedId) {
@@ -305,20 +461,23 @@ export function MatchTable({
         role="grid"
         aria-label={t("歌曲详细列表")}
         aria-multiselectable="true"
-        style={{ "--table-min-width": `${460 + visibleColumns.size * 100}px` } as CSSProperties}
+        style={{ "--table-min-width": `${tableMinWidth}px`, minWidth: `${tableMinWidth}px` } as CSSProperties}
         onKeyDown={handleKeyDown}
       >
+        <colgroup>
+          {visibleColumnIds.map((column) => <col key={column} data-column={column} style={{ width: `${columnWidths[column]}px` }} />)}
+        </colgroup>
         <thead><tr>
-          <th {...headerProps("export")} className="export-column">{t("导出")}</th>
-          <th {...headerProps("filename")} onClick={() => onSort("filename")}>{t("歌曲")}</th>
-          {visibleColumns.has("status") && <th {...headerProps("status")} onClick={() => onSort("status")}>{t("状态")}</th>}
-          {visibleColumns.has("raw-bpm") && <th {...headerProps("raw-bpm")} onClick={() => onSort("raw-bpm")}>{t("原始 BPM")}</th>}
-          {visibleColumns.has("mapped-bpm") && <th {...headerProps("mapped-bpm")} onClick={() => onSort("mapped-bpm")}>{t("映射 BPM")}</th>}
-          {visibleColumns.has("beat-count") && <th {...headerProps("beat-count")} onClick={() => onSort("beat-count")}>{t("拍点")}</th>}
-          {visibleColumns.has("phase-accuracy") && <th {...headerProps("phase-accuracy")} onClick={() => onSort("phase-accuracy")}>{t("相位准确率")}</th>}
-          {visibleColumns.has("tempo-change") && <th {...headerProps("tempo-change")} onClick={() => onSort("tempo-change")}>{t("变速")}</th>}
-          {visibleColumns.has("duration") && <th {...headerProps("duration")} onClick={() => onSort("duration")}>{t("输出时长")}</th>}
-          {visibleColumns.has("quality") && <th {...headerProps("quality")} onClick={() => onSort("quality")}>{t("综合质量")}</th>}
+          {renderHeader("export", t("导出"), false)}
+          {renderHeader("filename", t("歌曲"), true)}
+          {visibleColumns.has("status") && renderHeader("status", t("状态"), true)}
+          {visibleColumns.has("raw-bpm") && renderHeader("raw-bpm", t("原始 BPM"), true)}
+          {visibleColumns.has("mapped-bpm") && renderHeader("mapped-bpm", t("映射 BPM"), true)}
+          {visibleColumns.has("beat-count") && renderHeader("beat-count", t("拍点"), true)}
+          {visibleColumns.has("phase-accuracy") && renderHeader("phase-accuracy", t("相位准确率"), true)}
+          {visibleColumns.has("tempo-change") && renderHeader("tempo-change", t("变速"), true)}
+          {visibleColumns.has("duration") && renderHeader("duration", t("输出时长"), true)}
+          {visibleColumns.has("quality") && renderHeader("quality", t("综合质量"), true)}
         </tr></thead>
         <tbody>
           {ordered.map((track) => {
@@ -332,7 +491,7 @@ export function MatchTable({
               className={selected ? "selected highlighted" : ""}
               aria-selected={selected}
               tabIndex={focused ? 0 : -1}
-              draggable
+              draggable={!busy}
               onClick={(event) => selectRow(track.id, event)}
               onDoubleClick={() => onPreview(track.id, "processed-beat")}
               onContextMenu={(event) => {
@@ -340,6 +499,10 @@ export function MatchTable({
                 openContextMenu(track.id, event.clientX, event.clientY);
               }}
               onDragStart={(event) => {
+                if (busy) {
+                  event.preventDefault();
+                  return;
+                }
                 dragId.current = track.id;
                 event.dataTransfer.effectAllowed = "move";
                 event.dataTransfer.setData("text/plain", track.id);
@@ -353,7 +516,7 @@ export function MatchTable({
               onDrop={(event) => {
                 event.preventDefault();
                 event.currentTarget.classList.remove("drag-target");
-                dropBefore(track.id);
+                if (!busy) dropBefore(track.id);
               }}
             >
               <td data-column="export" className="export-column" onClick={(event) => event.stopPropagation()}>
@@ -361,7 +524,7 @@ export function MatchTable({
                   type="checkbox"
                   aria-label={`${track.source.fileName} ${t("加入导出")}`}
                   checked={track.edit.exportEnabled ?? false}
-                  disabled={track.status !== "complete" && typeof track.edit.exportEnabled !== "boolean"}
+                  disabled={busy || (track.status !== "complete" && typeof track.edit.exportEnabled !== "boolean")}
                   onChange={(event) => onExportEnabled([track.id], event.target.checked)}
                 />
               </td>
@@ -396,6 +559,15 @@ export function MatchTable({
             if (isOptionalColumn(columnMenu.column)) toggleColumn(columnMenu.column);
           }}
         >{t("隐藏“{column}”", { column: columnLabel(columnMenu.column) })}</button>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={columnWidths[columnMenu.column] === DEFAULT_COLUMN_WIDTHS[columnMenu.column]}
+          onClick={() => {
+            updateColumnWidth(columnMenu.column, DEFAULT_COLUMN_WIDTHS[columnMenu.column], true);
+            setColumnMenu(undefined);
+          }}
+        >{t("重置“{column}”列宽", { column: columnLabel(columnMenu.column) })}</button>
         <div role="separator" />
         {OPTIONAL_COLUMNS.map(({ id, label }) => <button
           key={id}
@@ -421,13 +593,13 @@ export function MatchTable({
       {contextMenu && <div ref={contextRef} className="classic-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
         <button type="button" role="menuitem" onClick={() => focusedId && runContext(() => onPreview(focusedId, "processed-beat"))}>{t("试听踩点")}(<u>P</u>)</button>
         <div role="separator" />
-        <button type="button" role="menuitem" onClick={() => runContext(() => onExportEnabled([...selectedIds], true))}>{t("加入导出")}(<u>I</u>)</button>
-        <button type="button" role="menuitem" onClick={() => runContext(() => onExportEnabled([...selectedIds], false))}>{t("排除导出")}(<u>X</u>)</button>
-        <button type="button" role="menuitem" onClick={() => runContext(onReanalyze)}>{t("重新分析")}(<u>A</u>)</button>
-        <button type="button" role="menuitem" onClick={() => runContext(() => onMove(-1))}>{t("上移")}(<u>U</u>)</button>
-        <button type="button" role="menuitem" onClick={() => runContext(() => onMove(1))}>{t("下移")}(<u>D</u>)</button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onExportEnabled([...selectedIds], true))}>{t("加入导出")}(<u>I</u>)</button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onExportEnabled([...selectedIds], false))}>{t("排除导出")}(<u>X</u>)</button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(onReanalyze)}>{t("重新分析")}(<u>A</u>)</button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onMove(-1))}>{t("上移")}(<u>U</u>)</button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(() => onMove(1))}>{t("下移")}(<u>D</u>)</button>
         <div role="separator" />
-        <button type="button" role="menuitem" onClick={() => runContext(onDelete)}>{t("删除")}(<u>L</u>)</button>
+        <button type="button" role="menuitem" disabled={busy} onClick={() => runContext(onDelete)}>{t("删除")}(<u>L</u>)</button>
         <div role="separator" />
         <button type="button" role="menuitem" onClick={() => runContext(onShowProperties)}>{t("歌曲属性")}(<u>R</u>)</button>
       </div>}

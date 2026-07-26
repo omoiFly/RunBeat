@@ -100,6 +100,10 @@ test("classic document shell uses property sheets and context help", async ({ pa
   await expect(page.getByRole("navigation", { name: "制作工作区" })).toHaveCount(0);
   await expect(page.locator(".application-status")).toContainText("尚未保存");
   await expect(page.getByText("要添加歌曲，请选择“文件”菜单中的“添加歌曲”，或将音频文件拖到此处。")).toBeVisible();
+  const inspectorSplitter = page.getByRole("separator", { name: "调整歌曲检查器宽度" });
+  await inspectorSplitter.focus();
+  await page.keyboard.press("ArrowLeft");
+  expect(await page.evaluate(() => localStorage.getItem("runbeat.inspector-width.v1"))).toBe("320");
   const nativeContextMenuSuppressed = await page.locator(".editor-workspace").evaluate((workspace) => {
     const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
     return !workspace.dispatchEvent(event) && event.defaultPrevented;
@@ -174,6 +178,8 @@ test("startup loads the core bitmap font and Help switches the persisted interfa
   await expect(englishMenu.getByRole("menuitem", { name: /File\(F\)/ })).toBeVisible();
   const englishGrid = page.getByRole("grid", { name: "Track detail list" });
   await expect(englishGrid.getByRole("columnheader", { name: "Phase Accuracy" })).toBeVisible();
+  await englishGrid.getByRole("separator", { name: "Resize the “Tracks” column" }).press("ArrowRight");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("runbeat.track-column-widths.v1") ?? "{}").filename)).toBe(308);
   const clippedHeaders = await englishGrid.getByRole("columnheader").evaluateAll((headers) => headers
     .filter((header) => header.scrollWidth > header.clientWidth)
     .map((header) => header.textContent?.trim()));
@@ -295,6 +301,9 @@ test("projects save explicitly and guard destructive navigation", async ({ page 
   await expect(saveDialog).toBeHidden();
   await expect(page.locator(".application-title-bar")).toContainText("周二间歇跑 - RunBeat");
   await expect(page.locator(".application-status")).toContainText(/已保存 \d{2}:\d{2}/);
+  await page.getByRole("menubar", { name: "应用程序菜单" }).getByRole("menuitem", { name: /文件\(F\)/ }).click();
+  await expect(page.getByRole("menu", { name: "file" }).getByRole("menuitem", { name: /1 周二间歇跑/ })).toBeVisible();
+  await page.keyboard.press("Escape");
 
   await openProjectProperties(page);
   await page.getByRole("dialog", { name: "项目属性" }).getByLabel("目标步频:").fill("180");
@@ -373,6 +382,12 @@ test("detailed track list analyzes locally and exports a localized timeline with
   const grid = page.getByRole("grid", { name: "歌曲详细列表" });
   await expect(grid.getByText("click-176.wav")).toBeVisible();
   await expect(grid.getByText("分析完成")).toBeVisible({ timeout: 80_000 });
+  const qualityBreakdown = page.getByText("综合质量计算").locator("..");
+  await expect(qualityBreakdown).toContainText("变速");
+  await expect(qualityBreakdown).toContainText("BPM 置信度");
+  await expect(qualityBreakdown).toContainText("相位对齐");
+  await expect(qualityBreakdown).not.toContainText("决定项");
+  await expect(qualityBreakdown).not.toContainText(/优秀范围|良好范围|可接受范围|置信度 ≥/);
   expect(requestedResources.some((name) => name.includes("analysis.worker"))).toBe(true);
   await expect.poll(() => requestedResources.some((name) => name.includes("essentia-wasm"))).toBe(true);
   await expect.poll(() => requestedResources.some((name) => name.includes("rubberband") && name.includes(".wasm"))).toBe(true);
@@ -390,11 +405,11 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await analyzedRow.click();
   await expect(page.getByText("歌曲属性", { exact: true })).toBeVisible();
   await analyzedRow.dblclick();
-  await expect(page.getByRole("status")).toHaveText("正在准备试听片段...");
-  await expect(page.getByRole("status")).toHaveText("试听中", { timeout: 80_000 });
+  await expect(page.getByRole("status")).toHaveText("准备中");
+  await expect(page.getByRole("status")).toHaveText("播放中", { timeout: 80_000 });
   await page.getByLabel("首拍(秒):").fill("0.20");
   await page.getByLabel("相位:").selectOption("0.5");
-  await expect(page.getByRole("status")).toHaveText("试听中");
+  await expect(page.getByRole("status")).toHaveText("播放中");
   await page.getByRole("button", { name: "停止", exact: true }).click();
   await page.getByRole("tab", { name: "分析" }).click();
   await expect(page.getByRole("group", { name: "分析结果" })).toContainText(/176|175|177/);

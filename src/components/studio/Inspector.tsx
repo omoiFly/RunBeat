@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
-import type { ProjectV1, Track } from "../../domain/types";
+import { QUALITY_LABELS, QUALITY_ORDER, type ProjectV1, type Quality, type Track } from "../../domain/types";
 import { useI18n } from "../../i18n";
 import type {
   PreviewAlignment,
@@ -69,6 +69,29 @@ function phaseAlignmentSummary(track: Track, t: Translate): { label: string; det
   return { label: `${model} · ${stability}`, detail: metrics };
 }
 
+type QualityFactorId = "tempo" | "bpm" | "phase";
+
+const QUALITY_ASSESSMENT_WARNINGS = new Set([
+  "减速超过 -20%，通常会明显影响听感",
+  "加速超过 +30%，可能明显影响听感",
+  "减速幅度较大（低于 -15%）",
+  "加速幅度较大（超过 +20%）",
+  "全局 BPM 置信度较低，建议手动确认",
+  "全局 BPM 置信度一般",
+  "未能自动锁定歌曲相位；综合质量已标记为“需校准”，请试听并手动设置歌曲首拍",
+  "歌曲拍点相位可靠性较低；综合质量已标记为“需校准”，建议手动设置歌曲首拍",
+  "歌曲拍点相位一致性一般，综合质量已降级，建议试听确认"
+]);
+
+function qualityFactorAdvice(factor: QualityFactorId, quality: Quality, t: Translate): string | undefined {
+  if (QUALITY_ORDER.indexOf(quality) < QUALITY_ORDER.indexOf("acceptable")) return undefined;
+  if (factor === "tempo") return t("调整目标步频或映射方式，并试听确认");
+  if (factor === "bpm") return t("手动确认 BPM");
+  return quality === "acceptable"
+    ? t("试听确认")
+    : t("试听并手动设置歌曲首拍");
+}
+
 function reportError(error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   window.dispatchEvent(new CustomEvent("runbeat:error", { detail: message }));
@@ -110,6 +133,43 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
   });
 
   const phaseSummary = track ? phaseAlignmentSummary(track, t) : undefined;
+  const derivedAnalysis = track?.derivedAnalysis;
+  const bpmConfidence = track?.edit.manualBpm != null ? 1 : track?.rawAnalysis?.bpmConfidence;
+  const qualityFactors = derivedAnalysis?.qualityFactors;
+  const qualityFactorRows = qualityFactors && derivedAnalysis
+    ? [
+        {
+          id: "tempo",
+          label: t("变速"),
+          quality: qualityFactors.tempoChange,
+          detail: `${derivedAnalysis.tempoChangePercent > 0 ? "+" : ""}${derivedAnalysis.tempoChangePercent.toFixed(2)}%`,
+          advice: qualityFactorAdvice("tempo", qualityFactors.tempoChange, t)
+        },
+        {
+          id: "bpm",
+          label: t("BPM 置信度"),
+          quality: qualityFactors.bpmConfidence,
+          detail: `${bpmConfidence == null ? "--" : `${(bpmConfidence * 100).toFixed(0)}%`}${track?.edit.manualBpm != null ? ` · ${t("手动确认")}` : ""}`,
+          advice: qualityFactorAdvice("bpm", qualityFactors.bpmConfidence, t)
+        },
+        {
+          id: "phase",
+          label: t("相位对齐"),
+          quality: qualityFactors.phaseAlignment,
+          detail: derivedAnalysis.phaseAlignmentModel === "manual"
+            ? t("手动确认")
+            : [
+                derivedAnalysis.phaseConfidence == null ? undefined : t("置信度 {value}%", { value: (derivedAnalysis.phaseConfidence * 100).toFixed(0) }),
+                derivedAnalysis.phaseCoverage == null ? undefined : t("覆盖 {value}%", { value: (derivedAnalysis.phaseCoverage * 100).toFixed(0) }),
+                derivedAnalysis.phaseMedianErrorMs == null ? undefined : t("误差 {value} ms", { value: derivedAnalysis.phaseMedianErrorMs.toFixed(0) })
+              ].filter((value): value is string => value != null).join(" · ") || "--",
+          advice: qualityFactorAdvice("phase", qualityFactors.phaseAlignment, t)
+        }
+      ]
+    : [];
+  const independentWarnings = derivedAnalysis?.warnings.filter(
+    (warning) => !qualityFactors || !QUALITY_ASSESSMENT_WARNINGS.has(warning)
+  ) ?? [];
   const sourceIn = track ? clamp(track.edit.sourceInSeconds, 0, track.durationSeconds) : 0;
   const sourceOut = track ? clamp(track.edit.sourceOutSeconds, sourceIn, track.durationSeconds) : 0;
   const editDraft = track ? editDrafts[track.id] : undefined;
@@ -380,13 +440,13 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
     window.requestAnimationFrame(() => document.getElementById(`inspector-tab-${next.id}`)?.focus());
   };
 
-  const previewStatusLabel = previewing ? {
-    preparing: t("正在准备试听片段..."),
-    buffering: t("正在缓冲试听..."),
-    playing: t("试听中"),
-    ended: t("试听已结束"),
-    failed: t("试听失败")
-  }[previewing.snapshot.status] : undefined;
+  const previewStatus = previewing ? {
+    preparing: { label: t("准备中"), state: "pending" },
+    buffering: { label: t("缓冲中"), state: "pending" },
+    playing: { label: t("播放中"), state: "playing" },
+    ended: { label: t("已结束"), state: "stopped" },
+    failed: { label: t("播放失败"), state: "failed" }
+  }[previewing.snapshot.status] : { label: t("已停止"), state: "stopped" };
 
   return (
     <aside className="inspector-pane" aria-label={t("歌曲检查器")}>
@@ -415,13 +475,44 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
             <legend>{t("分析结果")}</legend>
             <dl className="classic-property-grid">
               <dt>{t("原始 BPM")}:</dt><dd>{track.rawAnalysis?.rawBpm.toFixed(2) ?? "--"}</dd>
-              <dt>{t("映射 BPM")}:</dt><dd>{track.derivedAnalysis?.normalizedBpm.toFixed(2) ?? "--"}</dd>
-              <dt>{t("变速")}:</dt><dd>{track.derivedAnalysis ? `${track.derivedAnalysis.tempoChangePercent > 0 ? "+" : ""}${track.derivedAnalysis.tempoChangePercent.toFixed(2)}%` : "--"}</dd>
+              <dt>{t("节奏 BPM")}:</dt><dd>{track.rawAnalysis?.rhythmBpm?.toFixed(2) ?? "--"}</dd>
+              <dt>{t("映射 BPM")}:</dt><dd>{derivedAnalysis?.normalizedBpm.toFixed(2) ?? "--"}</dd>
+              <dt>{t("目标 SPM")}:</dt><dd>{project.targetSpm}</dd>
+              <dt>{t("映射方式")}:</dt><dd>{derivedAnalysis
+                ? `${derivedAnalysis.stepsPerBeat === 1 ? t("一拍一步") : t("一拍两步")} · ${t("检测倍频 ×{value}", { value: derivedAnalysis.detectorOctaveFactor })}`
+                : "--"}</dd>
+              <dt>{t("变速")}:</dt><dd>{derivedAnalysis ? `${derivedAnalysis.tempoChangePercent > 0 ? "+" : ""}${derivedAnalysis.tempoChangePercent.toFixed(2)}%` : "--"}</dd>
               <dt>{t("时长:")}</dt><dd>{formatDuration(track.durationSeconds)}</dd>
+              <dt>{t("输出时长")}:</dt><dd>{derivedAnalysis ? formatDuration(track.durationSeconds * derivedAnalysis.timeRatio) : "--"}</dd>
               <dt>{t("拍点:")}</dt><dd>{track.rawAnalysis?.beatTicks.length ? t("{count} 个", { count: track.rawAnalysis.beatTicks.length }) : "--"}</dd>
-              <dt>{t("相位:")}</dt><dd title={phaseSummary?.detail}>{phaseSummary?.label ?? "--"}</dd>
+              <dt>{t("BPM 置信度")}:</dt><dd>{bpmConfidence == null ? "--" : `${(bpmConfidence * 100).toFixed(0)}%${track.edit.manualBpm != null ? ` · ${t("手动确认")}` : ""}`}</dd>
+              <dt>{t("估计器差值")}:</dt><dd>{derivedAnalysis?.bpmAgreement == null ? "--" : `${derivedAnalysis.bpmAgreement.toFixed(2)} BPM`}</dd>
+              <dt>{t("相位:")}</dt><dd>{phaseSummary?.label ?? "--"}</dd>
+              <dt>{t("相位置信度")}:</dt><dd>{derivedAnalysis?.phaseConfidence == null ? "--" : `${(derivedAnalysis.phaseConfidence * 100).toFixed(0)}%`}</dd>
+              <dt>{t("可靠拍点覆盖")}:</dt><dd>{derivedAnalysis?.phaseCoverage == null ? "--" : `${(derivedAnalysis.phaseCoverage * 100).toFixed(0)}%`}</dd>
+              <dt>{t("拍点中位误差")}:</dt><dd>{derivedAnalysis?.phaseMedianErrorMs == null ? "--" : `${derivedAnalysis.phaseMedianErrorMs.toFixed(0)} ms`}</dd>
+              <dt>{t("BPM 精修")}:</dt><dd>{derivedAnalysis?.bpmRefinementPercent == null
+                ? t("未采用")
+                : `${derivedAnalysis.bpmRefinementPercent >= 0 ? "+" : ""}${derivedAnalysis.bpmRefinementPercent.toFixed(2)}%`}</dd>
             </dl>
           </fieldset>
+          {derivedAnalysis && <fieldset className="quality-breakdown">
+            <legend>{t("综合质量计算")}</legend>
+            <div className="quality-overall-row">
+              <strong>{t("综合质量")}:</strong>
+              <span className={`quality-label ${derivedAnalysis.quality}`}><i />{t(QUALITY_LABELS[derivedAnalysis.quality])}</span>
+            </div>
+            <div className="quality-factor-list">
+              {qualityFactorRows.map((factor) => <div key={factor.id} className="quality-factor-row">
+                <div>
+                  <strong>{factor.label}</strong>
+                  <span className={`quality-label ${factor.quality}`}><i />{t(QUALITY_LABELS[factor.quality])}</span>
+                </div>
+                <p>{factor.detail}</p>
+                {factor.advice && <p className="quality-factor-advice"><strong>{t("建议:")}</strong> {factor.advice}</p>}
+              </div>)}
+            </div>
+          </fieldset>}
           {track.status === "failed" && <fieldset className="analysis-error-panel" role="alert">
             <legend><span><ClassicIcon name="error" />{t("分析失败")}</span></legend>
             <p className="analysis-error-message">
@@ -431,9 +522,9 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
               {busy ? t("正在分析...") : t("重新分析")}
             </button>
           </fieldset>}
-          {!!track.derivedAnalysis?.warnings.length && <fieldset>
+          {!!independentWarnings.length && <fieldset>
             <legend>{t("警告")}</legend>
-            <ul className="classic-warning-list">{track.derivedAnalysis.warnings.map((warning) => <li key={warning}>{translateMessage(warning)}</li>)}</ul>
+            <ul className="classic-warning-list">{independentWarnings.map((warning) => <li key={warning}>{translateMessage(warning)}</li>)}</ul>
           </fieldset>}
           {track.status !== "failed" && track.rawAnalysis?.beatTicks.length === 0 && <button type="button" disabled={busy} onClick={onReanalyze}>
             {busy ? t("正在分析...") : t("重新分析")}
@@ -441,11 +532,17 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
         </div>}
 
         {track && tab === "preview" && <div className="inspector-tab-content" data-help="track-preview">
-          <fieldset>
-            <legend>{t("试听位置")}</legend>
-            <div className="field-row preview-start-row">
-              <label htmlFor={`preview-start-${track.id}`}>{t("播放头:")}</label>
-              <strong>{formatDuration(previewPosition)}</strong>
+          <fieldset className="preview-player">
+            <legend>{t("试听控制")}</legend>
+            <div className="preview-player-readout">
+              <div className="preview-player-position">
+                <label htmlFor={`preview-start-${track.id}`}>{t("播放头:")}</label>
+                <strong>{formatDuration(previewPosition)}</strong>
+              </div>
+              <div className="preview-player-status" role="status" data-state={previewStatus.state}>
+                <i aria-hidden="true" />
+                <span>{previewStatus.label}</span>
+              </div>
             </div>
             <input
               id={`preview-start-${track.id}`}
@@ -487,20 +584,30 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
               }}
             />
             <div className="preview-time-scale"><span>{formatDuration(sourceIn)}</span><span>{formatDuration(sourceOut)}</span></div>
-            <div className="preview-source-range">{formatDuration(previewPosition)} - {formatDuration(sourceOut)}</div>
-          </fieldset>
-          <fieldset>
-            <legend>{t("试听版本")}</legend>
-            <div className="classic-button-column">
-              <button type="button" className={activePreviewMode === "original" ? "pressed" : ""} onClick={() => void preview("original")}><ClassicIcon name="play" />{t("原始音频")}</button>
-              <button type="button" className={activePreviewMode === "processed" ? "pressed" : ""} onClick={() => void preview("processed")}><ClassicIcon name="play" />{t("处理后")}</button>
-              <button type="button" className={activePreviewMode === "processed-beat" ? "pressed" : ""} onClick={() => void preview("processed-beat")}><ClassicIcon name="play" />{t("处理后 + 节拍轨")}</button>
-              <button type="button" disabled={!activePreviewMode} onClick={stop}><ClassicIcon name="stop" />{t("停止")}</button>
+            <div className="preview-control-grid" role="group" aria-label={t("试听版本")}>
+              <button
+                type="button"
+                className={`preview-control-button${activePreviewMode === "original" ? " pressed" : ""}`}
+                aria-pressed={activePreviewMode === "original"}
+                onClick={() => void preview("original")}
+              ><ClassicIcon name="play" />{t("原始音频")}</button>
+              <button
+                type="button"
+                className={`preview-control-button${activePreviewMode === "processed" ? " pressed" : ""}`}
+                aria-pressed={activePreviewMode === "processed"}
+                onClick={() => void preview("processed")}
+              ><ClassicIcon name="play" />{t("处理后")}</button>
+              <button
+                type="button"
+                className={`preview-control-button${activePreviewMode === "processed-beat" ? " pressed" : ""}`}
+                aria-pressed={activePreviewMode === "processed-beat"}
+                onClick={() => void preview("processed-beat")}
+              ><ClassicIcon name="play" />{t("处理后 + 节拍轨")}</button>
+              <button type="button" className="preview-control-button stop" disabled={!activePreviewMode} onClick={stop}>
+                <ClassicIcon name="stop" />{t("停止")}
+              </button>
             </div>
           </fieldset>
-          {previewStatusLabel && <div className="classic-progress-label" role="status">
-            {previewStatusLabel}
-          </div>}
           <fieldset>
             <legend>{t("手动校准")}</legend>
             <div className="classic-form-grid">
@@ -510,6 +617,7 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
                 type="number"
                 min={40}
                 max={240}
+                disabled={busy}
                 placeholder={track.rawAnalysis?.rawBpm.toFixed(2)}
                 value={manualBpmDraft}
                 onChange={(event) => setEditDraft("manualBpm", event.target.value)}
@@ -523,6 +631,7 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
                 min={0}
                 max={track.durationSeconds}
                 step={0.01}
+                disabled={busy}
                 placeholder={t("自动检测")}
                 value={track.edit.manualFirstBeat ?? ""}
                 onChange={(event) => changeFirstBeat(event.target.value)}
@@ -531,6 +640,7 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
               <select
                 id={`phase-${track.id}`}
                 value={track.edit.phaseNudgeBeats}
+                disabled={busy}
                 onChange={(event) => changePhaseNudge(Number(event.target.value) as -0.5 | 0 | 0.5)}
               >
                 <option value={-0.5}>{t("提前半拍")}</option>
@@ -550,6 +660,7 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
                 min={0}
                 max={track.edit.sourceOutSeconds}
                 step={0.1}
+                disabled={busy}
                 value={sourceInDraft}
                 onChange={(event) => setEditDraft("sourceIn", event.target.value)}
                 onBlur={commitSourceIn}
@@ -562,6 +673,7 @@ export function Inspector({ project, track, busy, onTrackEdit, onReanalyze }: {
                 min={track.edit.sourceInSeconds}
                 max={track.durationSeconds}
                 step={0.1}
+                disabled={busy}
                 value={sourceOutDraft}
                 onChange={(event) => setEditDraft("sourceOut", event.target.value)}
                 onBlur={commitSourceOut}

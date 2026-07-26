@@ -28,7 +28,13 @@ beforeEach(() => {
   useProjectStore.setState({
     project: createProject(),
     revision: 0,
-    isDirty: false
+    savedRevision: 0,
+    undoStack: [],
+    redoStack: [],
+    isDirty: false,
+    analysisProgress: {},
+    analysisTask: undefined,
+    busy: false
   });
 });
 
@@ -107,6 +113,111 @@ describe("target cadence range", () => {
 
     useProjectStore.getState().setTargetSpm(231);
     expect(useProjectStore.getState().project.targetSpm).toBe(230);
+  });
+});
+
+describe("project edit history", () => {
+  it("undoes and redoes project edits while updating the dirty state", () => {
+    useProjectStore.getState().setTargetSpm(192);
+
+    expect(useProjectStore.getState()).toMatchObject({
+      isDirty: true,
+      project: { targetSpm: 192 }
+    });
+    expect(useProjectStore.getState().undoStack).toHaveLength(1);
+
+    useProjectStore.getState().undo();
+    expect(useProjectStore.getState()).toMatchObject({
+      isDirty: false,
+      project: { targetSpm: 180 }
+    });
+    expect(useProjectStore.getState().redoStack).toHaveLength(1);
+
+    useProjectStore.getState().redo();
+    expect(useProjectStore.getState()).toMatchObject({
+      isDirty: true,
+      project: { targetSpm: 192 }
+    });
+  });
+
+  it("groups one project-properties apply into a single undo step", () => {
+    useProjectStore.getState().setTargetSpm(188);
+    useProjectStore.getState().setMappingMode("one-step-per-beat");
+    useProjectStore.getState().setMaxTempoChange(10);
+
+    expect(useProjectStore.getState().undoStack).toHaveLength(1);
+    useProjectStore.getState().undo();
+    expect(useProjectStore.getState().project).toMatchObject({
+      targetSpm: 180,
+      mappingMode: "auto",
+      maxTempoChangePercent: 20
+    });
+  });
+
+  it("clears redo history after a new edit", () => {
+    useProjectStore.getState().setTargetSpm(188);
+    useProjectStore.getState().undo();
+    expect(useProjectStore.getState().redoStack).toHaveLength(1);
+
+    useProjectStore.getState().setMappingMode("two-steps-per-beat");
+    expect(useProjectStore.getState().redoStack).toHaveLength(0);
+  });
+});
+
+describe("analysis cancellation", () => {
+  it("returns an interrupted new track to the waiting state", () => {
+    useProjectStore.setState((state) => ({
+      project: { ...state.project, tracks: [{ ...track("active", 0), status: "analyzing-bpm" }] },
+      busy: true,
+      analysisProgress: { active: 0.42 },
+      analysisTask: { kind: "add", trackIds: ["active"], settledTrackIds: [], total: 1 }
+    }));
+
+    useProjectStore.getState().cancelAnalysis();
+
+    expect(useProjectStore.getState()).toMatchObject({
+      busy: false,
+      analysisTask: undefined,
+      analysisProgress: {},
+      project: { tracks: [{ status: "queued" }] }
+    });
+  });
+
+  it("restores the previous result when reanalysis is canceled", () => {
+    const previousProject = {
+      ...createProject(),
+      tracks: [{ ...track("active", 0), status: "complete" as const }]
+    };
+    useProjectStore.setState({
+      project: {
+        ...previousProject,
+        tracks: [{ ...previousProject.tracks[0], status: "analyzing-beats" }]
+      },
+      revision: 12,
+      savedRevision: 11,
+      undoStack: [{
+        project: previousProject,
+        revision: 11,
+        label: "重新分析歌曲",
+        changedAt: Date.now()
+      }],
+      redoStack: [],
+      isDirty: true,
+      busy: true,
+      analysisProgress: { active: 0.7 },
+      analysisTask: { kind: "reanalyze", trackIds: ["active"], settledTrackIds: [], total: 1 }
+    });
+
+    useProjectStore.getState().cancelAnalysis();
+
+    expect(useProjectStore.getState()).toMatchObject({
+      project: { tracks: [{ status: "complete" }] },
+      revision: 11,
+      isDirty: false,
+      undoStack: [],
+      busy: false,
+      analysisTask: undefined
+    });
   });
 });
 

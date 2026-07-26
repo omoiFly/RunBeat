@@ -16,9 +16,15 @@ class RunBeatDatabase extends Dexie {
 }
 
 export const db = new RunBeatDatabase();
+export const PROJECTS_CHANGED_EVENT = "runbeat:projects-changed";
+
+function notifyProjectsChanged(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(PROJECTS_CHANGED_EVENT));
+}
 
 export async function saveProject(project: ProjectV1): Promise<void> {
   await db.projects.put({ id: project.id, updatedAt: project.updatedAt, project });
+  notifyProjectsChanged();
 }
 
 export async function loadProject(id: string): Promise<ProjectV1 | undefined> {
@@ -31,4 +37,5 @@ export async function listProjects(): Promise<ProjectV1[]> {
 
 export async function deleteProject(id: string): Promise<void> {
   await db.projects.delete(id);
+  notifyProjectsChanged();
 }

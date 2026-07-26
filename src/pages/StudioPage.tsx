@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import type { AppCommand } from "../components/AppLayout";
 import { ClassicIcon } from "../components/ClassicIcon";
@@ -44,6 +44,31 @@ const STATUS_ORDER: Track["status"][] = [
 ];
 
 const AUTO_SAVE_DELAY_MS = 250;
+const INSPECTOR_WIDTH_KEY = "runbeat.inspector-width.v1";
+const DEFAULT_INSPECTOR_WIDTH = 310;
+const MIN_INSPECTOR_WIDTH = 240;
+const MAX_INSPECTOR_WIDTH = 520;
+
+function readInspectorWidth(): number {
+  try {
+    const raw = localStorage.getItem(INSPECTOR_WIDTH_KEY);
+    if (raw != null) {
+      const stored = Number(raw);
+      if (Number.isFinite(stored)) return Math.max(MIN_INSPECTOR_WIDTH, Math.min(MAX_INSPECTOR_WIDTH, stored));
+    }
+  } catch {
+    // The width remains session-local when storage is unavailable.
+  }
+  return DEFAULT_INSPECTOR_WIDTH;
+}
+
+function persistInspectorWidth(width: number): void {
+  try {
+    localStorage.setItem(INSPECTOR_WIDTH_KEY, String(width));
+  } catch {
+    // The width remains session-local when storage is unavailable.
+  }
+}
 
 function orderedTracks(project: ProjectV1): Track[] {
   return [...project.tracks].sort((left, right) => left.order - right.order);
@@ -73,12 +98,15 @@ export function StudioPage() {
   const [params] = useSearchParams();
   const initializedRoute = useRef<string | undefined>(undefined);
   const pendingAction = useRef<GuardedAction | undefined>(undefined);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const inspectorResize = useRef<{ pointerId: number } | undefined>(undefined);
   const addFilesRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const relinkRef = useRef<HTMLInputElement>(null);
   const [selection, setSelectedIds] = useState<Set<string>>(new Set());
   const [focus, setFocusedId] = useState<string>();
   const [inspectorVisible, setInspectorVisible] = useState(true);
+  const [inspectorWidth, setInspectorWidth] = useState(readInspectorWidth);
   const [sortState, setSortState] = useState<{ key?: ListSortKey; direction: TrackSortDirection }>({ direction: "asc" });
   const [projectPropertiesOpen, setProjectPropertiesOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -99,6 +127,7 @@ export function StudioPage() {
     initialize,
     addFiles,
     reanalyzeTrack,
+    reanalyzeTracks,
     removeTracks,
     setTargetSpm,
     setMappingMode,
@@ -115,7 +144,9 @@ export function StudioPage() {
     relinkFiles,
     saveCurrent,
     saveAs,
-    discardChanges
+    discardChanges,
+    undo,
+    redo
   } = useProjectStore();
   const projectParam = params.get("project") ?? undefined;
   const routeSession = projectParam ? `project:${projectParam}` : `new:${params.get("new") ?? "default"}`;
@@ -266,12 +297,28 @@ export function StudioPage() {
   }, [project, reorderTracks, sortState]);
 
   const reanalyzeSelected = useCallback(async () => {
-    for (const track of orderedTracks(useProjectStore.getState().project)) {
-      if (selectedIds.has(track.id)) await useProjectStore.getState().reanalyzeTrack(track.id);
-    }
-  }, [selectedIds]);
+    const trackIds = orderedTracks(useProjectStore.getState().project)
+      .filter((track) => selectedIds.has(track.id))
+      .map((track) => track.id);
+    await reanalyzeTracks(trackIds);
+  }, [reanalyzeTracks, selectedIds]);
 
   const handleCommand = useCallback((command: AppCommand) => {
+    const allowedDuringAnalysis: readonly string[] = [
+      "select-all",
+      "track-properties"
+    ];
+    if (busy && !allowedDuringAnalysis.includes(command)) {
+      useProjectStore.setState({ notice: "分析进行中；请先停止任务再修改项目。" });
+      return;
+    }
+    if (command.startsWith("open-recent-project:")) {
+      const projectId = command.slice("open-recent-project:".length);
+      if (projectId && (!hasSavedRecord || projectId !== project.id)) {
+        runGuarded(() => navigate(`/studio?project=${encodeURIComponent(projectId)}`));
+      }
+      return;
+    }
     switch (command) {
       case "new-project":
         runGuarded(() => navigate(`/studio?new=${Date.now()}`));
@@ -303,6 +350,14 @@ export function StudioPage() {
         break;
       case "close-project":
         runGuarded(() => navigate("/projects"));
+        break;
+      case "undo":
+        undo();
+        setSortState({ direction: "asc" });
+        break;
+      case "redo":
+        redo();
+        setSortState({ direction: "asc" });
         break;
       case "select-all":
         selectAll();
@@ -342,11 +397,13 @@ export function StudioPage() {
         break;
     }
   }, [
+    busy,
     exportProjectFile,
     focusedId,
     hasSavedRecord,
     moveSelection,
     navigate,
+    project.id,
     project.exportSettings.format,
     reanalyzeSelected,
     requestSave,
@@ -354,7 +411,9 @@ export function StudioPage() {
     runGuarded,
     selectAll,
     selectedIds,
-    setTracksExportEnabled
+    setTracksExportEnabled,
+    undo,
+    redo
   ]);
 
   useEffect(() => {
@@ -400,6 +459,49 @@ export function StudioPage() {
     if (!event.dataTransfer.files.length) return;
     event.preventDefault();
     void addFiles(Array.from(event.dataTransfer.files));
+  };
+
+  const inspectorWidthFromPointer = (clientX: number): number => {
+    const rect = workspaceRef.current?.getBoundingClientRect();
+    if (!rect) return inspectorWidth;
+    const maximum = Math.max(MIN_INSPECTOR_WIDTH, Math.min(MAX_INSPECTOR_WIDTH, rect.width - 320));
+    return Math.round(Math.max(MIN_INSPECTOR_WIDTH, Math.min(maximum, rect.right - clientX - 3)));
+  };
+
+  const beginInspectorResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    inspectorResize.current = { pointerId: event.pointerId };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setInspectorWidth(inspectorWidthFromPointer(event.clientX));
+  };
+
+  const moveInspectorResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (inspectorResize.current?.pointerId !== event.pointerId) return;
+    setInspectorWidth(inspectorWidthFromPointer(event.clientX));
+  };
+
+  const endInspectorResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (inspectorResize.current?.pointerId !== event.pointerId) return;
+    const width = inspectorWidthFromPointer(event.clientX);
+    inspectorResize.current = undefined;
+    setInspectorWidth(width);
+    persistInspectorWidth(width);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const resizeInspectorWithKeyboard = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home"
+      ? DEFAULT_INSPECTOR_WIDTH
+      : Math.max(
+          MIN_INSPECTOR_WIDTH,
+          Math.min(MAX_INSPECTOR_WIDTH, inspectorWidth + (event.key === "ArrowLeft" ? 10 : -10))
+        );
+    setInspectorWidth(next);
+    persistInspectorWidth(next);
   };
 
   const confirmDelete = () => {
@@ -478,7 +580,11 @@ export function StudioPage() {
         <button type="button" onClick={() => relinkRef.current?.click()}>{t("重新关联...")}</button>
       </div>}
 
-      <div className="editor-workspace">
+      <div
+        ref={workspaceRef}
+        className="editor-workspace"
+        style={{ "--inspector-width": `${inspectorWidth}px` } as CSSProperties}
+      >
         <section className="track-list-pane" aria-label={t("歌曲列表")}>
           <MatchTable
             tracks={project.tracks}
@@ -507,15 +613,39 @@ export function StudioPage() {
             }}
             onShowProperties={() => setInspectorVisible(true)}
             onSort={sortList}
+            sortKey={sortState.key}
+            sortDirection={sortState.direction}
+            busy={busy}
           />
         </section>
-        {inspectorVisible && <Inspector
-          project={project}
-          track={focusedTrack}
-          busy={busy}
-          onTrackEdit={(patch) => focusedTrack && updateTrackEdit(focusedTrack.id, patch)}
-          onReanalyze={() => focusedTrack && void reanalyzeTrack(focusedTrack.id)}
-        />}
+        {inspectorVisible && <>
+          <div
+            className="inspector-splitter"
+            role="separator"
+            aria-label={t("调整歌曲检查器宽度")}
+            aria-orientation="vertical"
+            aria-valuemin={MIN_INSPECTOR_WIDTH}
+            aria-valuemax={MAX_INSPECTOR_WIDTH}
+            aria-valuenow={inspectorWidth}
+            tabIndex={0}
+            onPointerDown={beginInspectorResize}
+            onPointerMove={moveInspectorResize}
+            onPointerUp={endInspectorResize}
+            onPointerCancel={endInspectorResize}
+            onDoubleClick={() => {
+              setInspectorWidth(DEFAULT_INSPECTOR_WIDTH);
+              persistInspectorWidth(DEFAULT_INSPECTOR_WIDTH);
+            }}
+            onKeyDown={resizeInspectorWithKeyboard}
+          />
+          <Inspector
+            project={project}
+            track={focusedTrack}
+            busy={busy}
+            onTrackEdit={(patch) => focusedTrack && updateTrackEdit(focusedTrack.id, patch)}
+            onReanalyze={() => focusedTrack && void reanalyzeTrack(focusedTrack.id)}
+          />
+        </>}
       </div>
 
       {(deletePromptOpen || deleteProjectPromptOpen || unsavedPromptOpen || errorMessage != null) && <Suspense fallback={<LazyDialogFallback />}>

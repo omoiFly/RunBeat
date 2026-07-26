@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { DEFAULT_PROJECT_NAME } from "../domain/types";
+import { DEFAULT_PROJECT_NAME, type ProjectV1 } from "../domain/types";
 import { useI18n } from "../i18n";
+import { listProjects, PROJECTS_CHANGED_EVENT } from "../services/db";
 import { useProjectStore } from "../store/projectStore";
 import { ClassicIcon, type ClassicIconName } from "./ClassicIcon";
 import { CONTEXT_HELP } from "./contextHelp";
@@ -17,6 +18,7 @@ type MenuName = (typeof MENU_ORDER)[number];
 export type AppCommand =
   | "new-project"
   | "open-project"
+  | `open-recent-project:${string}`
   | "save-project"
   | "save-project-as"
   | "add-tracks"
@@ -24,6 +26,8 @@ export type AppCommand =
   | "backup-project"
   | "export-audio"
   | "close-project"
+  | "undo"
+  | "redo"
   | "select-all"
   | "include-selected"
   | "exclude-selected"
@@ -89,14 +93,19 @@ export function AppLayout() {
   const [helpMode, setHelpMode] = useState(false);
   const [helpPopup, setHelpPopup] = useState<{ text: string; x: number; y: number }>();
   const [uiPrefs, setUiPrefs] = useState(readUiPrefs);
+  const [recentProjects, setRecentProjects] = useState<ProjectV1[]>([]);
   const project = useProjectStore((state) => state.project);
   const busy = useProjectStore((state) => state.busy);
+  const analysisProgress = useProjectStore((state) => state.analysisProgress);
+  const analysisTask = useProjectStore((state) => state.analysisTask);
   const notice = useProjectStore((state) => state.notice);
   const isDirty = useProjectStore((state) => state.isDirty);
+  const canUndo = useProjectStore((state) => state.undoStack.length > 0);
+  const canRedo = useProjectStore((state) => state.redoStack.length > 0);
+  const cancelAnalysis = useProjectStore((state) => state.cancelAnalysis);
   const hasSavedRecord = useProjectStore((state) => state.hasSavedRecord);
   const saveState = useProjectStore((state) => state.saveState);
   const lastSavedAt = useProjectStore((state) => state.lastSavedAt);
-  const completedCount = project.tracks.filter((track) => track.status === "complete").length;
   const inStudio = location.pathname === "/studio" || location.pathname === "/";
   const inProjects = location.pathname === "/projects";
   const projectTitle = project.name === DEFAULT_PROJECT_NAME ? t("未命名项目") : project.name;
@@ -110,9 +119,16 @@ export function AppLayout() {
       : hasSavedRecord
         ? t("已保存 {time}", { time: timeLabel(lastSavedAt, language) })
         : t("尚未保存");
-  const primaryStatus = menuStatus || translateMessage(notice) || (busy
-    ? t("正在分析歌曲：{done}/{total}", { done: completedCount, total: project.tracks.length })
-    : t("就绪"));
+  const analysisPercent = analysisTask?.total
+    ? Math.round(analysisTask.trackIds.reduce((total, trackId) => total + (analysisProgress[trackId] ?? 0), 0) / analysisTask.total * 100)
+    : 0;
+  const primaryStatus = menuStatus || (busy && analysisTask
+    ? t("正在分析歌曲：{done}/{total} · {percent}%", {
+        done: analysisTask.settledTrackIds.length,
+        total: analysisTask.total,
+        percent: analysisPercent
+      })
+    : translateMessage(notice) || t("就绪"));
 
   const setPreference = (name: keyof typeof uiPrefs, value: boolean) => {
     setUiPrefs((current) => {
@@ -145,6 +161,25 @@ export function AppLayout() {
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("runbeat:inspector", { detail: uiPrefs.inspector }));
   }, [uiPrefs.inspector]);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void listProjects()
+        .then((projects) => {
+          if (active) setRecentProjects(projects.slice(0, 5));
+        })
+        .catch(() => {
+          if (active) setRecentProjects([]);
+        });
+    };
+    refresh();
+    window.addEventListener(PROJECTS_CHANGED_EVENT, refresh);
+    return () => {
+      active = false;
+      window.removeEventListener(PROJECTS_CHANGED_EVENT, refresh);
+    };
+  }, []);
 
   useEffect(() => {
     document.title = title;
@@ -227,6 +262,9 @@ export function AppLayout() {
       else if ((event.ctrlKey || event.metaKey) && key === "o") dispatchCommand("open-project");
       else if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "s") dispatchCommand("save-project-as");
       else if ((event.ctrlKey || event.metaKey) && key === "s") dispatchCommand("save-project");
+      else if ((event.ctrlKey || event.metaKey) && event.shiftKey && key === "z" && !editing) dispatchCommand("redo");
+      else if ((event.ctrlKey || event.metaKey) && key === "z" && !editing) dispatchCommand("undo");
+      else if ((event.ctrlKey || event.metaKey) && key === "y" && !editing) dispatchCommand("redo");
       else if ((event.ctrlKey || event.metaKey) && key === "e") dispatchCommand("export-audio");
       else if ((event.ctrlKey || event.metaKey) && key === "w") dispatchCommand("close-project");
       else if ((event.ctrlKey || event.metaKey) && key === "a" && !editing) dispatchCommand("select-all");
@@ -352,38 +390,59 @@ export function AppLayout() {
     <>{t(source)}(<u>{key}</u>){ellipsis ? "…" : ""}</>
   );
 
+  const recentProjectItems: MenuItem[] = recentProjects.length
+    ? [
+        { separator: true, label: "" },
+        ...recentProjects.map((recentProject, index): MenuItem => ({
+          id: `recent-${recentProject.id}`,
+          label: <span className="recent-project-label"><u>{index + 1}</u> {recentProject.name}</span>,
+          ariaLabel: `${index + 1} ${recentProject.name}`,
+          disabled: inStudio && (busy || (hasSavedRecord && recentProject.id === project.id)),
+          description: t("打开最近使用的项目“{name}”。", { name: recentProject.name }),
+          action: () => {
+            if (inStudio) dispatchCommand(`open-recent-project:${recentProject.id}`);
+            else navigate(`/studio?project=${encodeURIComponent(recentProject.id)}`);
+          }
+        }))
+      ]
+    : [];
+
   const menus: Array<{ name: MenuName; label: ReactNode; items: MenuItem[] }> = [
     {
       name: "file",
       label: accessLabel("文件", "F"),
       items: [
-        { label: accessLabel("新建项目", "N"), command: "new-project", shortcut: "Ctrl+N", description: t("创建一个新的未命名项目。") },
-        { label: accessLabel("打开项目", "O", true), command: "open-project", shortcut: "Ctrl+O", description: t("打开保存在当前设备上的项目。") },
+        { label: accessLabel("新建项目", "N"), command: "new-project", shortcut: "Ctrl+N", disabled: inStudio && busy, description: t("创建一个新的未命名项目。") },
+        { label: accessLabel("打开项目", "O", true), command: "open-project", shortcut: "Ctrl+O", disabled: inStudio && busy, description: t("打开保存在当前设备上的项目。") },
+        ...recentProjectItems,
         { separator: true, label: "" },
-        { label: accessLabel("保存项目", "S"), command: "save-project", shortcut: "Ctrl+S", disabled: !inStudio, description: t("保存当前项目。") },
-        { label: accessLabel("项目另存为", "A", true), command: "save-project-as", shortcut: "Ctrl+Shift+S", disabled: !inStudio, description: t("用新名称保存项目副本。") },
+        { label: accessLabel("保存项目", "S"), command: "save-project", shortcut: "Ctrl+S", disabled: !inStudio || busy, description: t("保存当前项目。") },
+        { label: accessLabel("项目另存为", "A", true), command: "save-project-as", shortcut: "Ctrl+Shift+S", disabled: !inStudio || busy, description: t("用新名称保存项目副本。") },
         { separator: true, label: "" },
-        { label: accessLabel("添加歌曲", "M", true), command: "add-tracks", shortcut: "Insert", disabled: !inStudio, description: t("向当前项目添加音频文件。") },
-        { label: accessLabel("导入项目文件", "I", true), command: "import-project", disabled: !inStudio, description: t("从 .runbeat.json 文件导入项目。") },
-        { label: accessLabel("备份项目文件", "B", true), command: "backup-project", disabled: !inStudio, description: t("下载当前项目的 JSON 备份。") },
+        { label: accessLabel("添加歌曲", "M", true), command: "add-tracks", shortcut: "Insert", disabled: !inStudio || busy, description: t("向当前项目添加音频文件。") },
+        { label: accessLabel("导入项目文件", "I", true), command: "import-project", disabled: !inStudio || busy, description: t("从 .runbeat.json 文件导入项目。") },
+        { label: accessLabel("备份项目文件", "B", true), command: "backup-project", disabled: !inStudio || busy, description: t("下载当前项目的 JSON 备份。") },
         { separator: true, label: "" },
-        { label: accessLabel("导出音频", "E", true), command: "export-audio", shortcut: "Ctrl+E", disabled: !inStudio, description: t("打开导出音频向导。") },
+        { label: accessLabel("导出音频", "E", true), command: "export-audio", shortcut: "Ctrl+E", disabled: !inStudio || busy, description: t("打开导出音频向导。") },
         { separator: true, label: "" },
-        { label: accessLabel("关闭项目", "C"), command: "close-project", shortcut: "Ctrl+W", disabled: !inStudio, description: t("关闭当前项目并返回本地项目列表。") }
+        { label: accessLabel("关闭项目", "C"), command: "close-project", shortcut: "Ctrl+W", disabled: !inStudio || busy, description: t("关闭当前项目并返回本地项目列表。") }
       ]
     },
     {
       name: "edit",
       label: accessLabel("编辑", "E"),
       items: [
+        { label: accessLabel("撤销", "U"), command: "undo", shortcut: "Ctrl+Z", disabled: !inStudio || !canUndo || busy, description: t("撤销上一步项目编辑。") },
+        { label: accessLabel("重做", "R"), command: "redo", shortcut: "Ctrl+Y", disabled: !inStudio || !canRedo || busy, description: t("重做刚刚撤销的项目编辑。") },
+        { separator: true, label: "" },
         { label: accessLabel("全选歌曲", "A"), command: "select-all", shortcut: "Ctrl+A", disabled: !inStudio, description: t("选择列表中的全部歌曲。") },
         { separator: true, label: "" },
-        { label: accessLabel("加入导出", "I"), command: "include-selected", shortcut: "Space", disabled: !inStudio, description: t("把所选歌曲加入导出。") },
-        { label: accessLabel("排除导出", "X"), command: "exclude-selected", disabled: !inStudio, description: t("从导出中排除所选歌曲。") },
-        { label: accessLabel("上移", "U"), command: "move-up", shortcut: "Alt+↑", disabled: !inStudio, description: t("在播放顺序中上移所选歌曲。") },
-        { label: accessLabel("下移", "D"), command: "move-down", shortcut: "Alt+↓", disabled: !inStudio, description: t("在播放顺序中下移所选歌曲。") },
+        { label: accessLabel("加入导出", "I"), command: "include-selected", shortcut: "Space", disabled: !inStudio || busy, description: t("把所选歌曲加入导出。") },
+        { label: accessLabel("排除导出", "X"), command: "exclude-selected", disabled: !inStudio || busy, description: t("从导出中排除所选歌曲。") },
+        { label: accessLabel("上移", "U"), command: "move-up", shortcut: "Alt+↑", disabled: !inStudio || busy, description: t("在播放顺序中上移所选歌曲。") },
+        { label: accessLabel("下移", "D"), command: "move-down", shortcut: "Alt+↓", disabled: !inStudio || busy, description: t("在播放顺序中下移所选歌曲。") },
         { separator: true, label: "" },
-        { label: accessLabel("删除", "L"), command: "delete-selected", shortcut: "Del", disabled: !inStudio, description: t("从项目中删除所选歌曲。") },
+        { label: accessLabel("删除", "L"), command: "delete-selected", shortcut: "Del", disabled: !inStudio || busy, description: t("从项目中删除所选歌曲。") },
         { label: accessLabel("歌曲属性", "P"), command: "track-properties", shortcut: "Alt+Enter", disabled: !inStudio, description: t("显示焦点歌曲的检查器。") }
       ]
     },
@@ -400,12 +459,12 @@ export function AppLayout() {
       name: "project",
       label: accessLabel("项目", "P"),
       items: [
-        { label: accessLabel("项目属性", "P", true), command: "project-properties", disabled: !inStudio, description: t("设置项目名称、目标步频和全局节拍轨。") },
-        { label: accessLabel("删除项目", "D", true), command: "delete-project", disabled: (!inStudio && !inProjects) || (inStudio && !hasSavedRecord), description: inProjects ? t("永久删除本地项目列表中所选的项目。") : t("永久删除当前项目并返回本地项目列表。") },
+        { label: accessLabel("项目属性", "P", true), command: "project-properties", disabled: !inStudio || busy, description: t("设置项目名称、目标步频和全局节拍轨。") },
+        { label: accessLabel("删除项目", "D", true), command: "delete-project", disabled: (!inStudio && !inProjects) || (inStudio && (!hasSavedRecord || busy)), description: inProjects ? t("永久删除本地项目列表中所选的项目。") : t("永久删除当前项目并返回本地项目列表。") },
         { separator: true, label: "" },
-        { label: accessLabel("按当前范围重新选择", "S"), command: "reset-selection", disabled: !inStudio, description: t("根据项目的变速范围重新设置默认导出歌曲。") },
-        { label: accessLabel("重新分析所选歌曲", "A"), command: "reanalyze-selected", disabled: !inStudio, description: t("重新分析当前所选歌曲的 BPM 与拍点。") },
-        { label: accessLabel("重新关联文件", "R", true), command: "relink-files", disabled: !inStudio, description: t("重新选择保存项目引用的原始音频文件。") }
+        { label: accessLabel("按当前范围重新选择", "S"), command: "reset-selection", disabled: !inStudio || busy, description: t("根据项目的变速范围重新设置默认导出歌曲。") },
+        { label: accessLabel("重新分析所选歌曲", "A"), command: "reanalyze-selected", disabled: !inStudio || busy, description: t("重新分析当前所选歌曲的 BPM 与拍点。") },
+        { label: accessLabel("重新关联文件", "R", true), command: "relink-files", disabled: !inStudio || busy, description: t("重新选择保存项目引用的原始音频文件。") }
       ]
     },
     {
@@ -431,11 +490,11 @@ export function AppLayout() {
   ];
 
   const toolbarButtons: Array<{ icon: ClassicIconName; command: AppCommand; label: string; disabled?: boolean }> = [
-    { icon: "new", command: "new-project", label: t("新建项目") },
-    { icon: "open", command: "open-project", label: t("打开项目") },
-    { icon: "save", command: "save-project", label: t("保存项目"), disabled: !inStudio },
-    { icon: "add", command: "add-tracks", label: t("添加歌曲"), disabled: !inStudio },
-    { icon: "export", command: "export-audio", label: t("导出音频"), disabled: !inStudio }
+    { icon: "new", command: "new-project", label: t("新建项目"), disabled: inStudio && busy },
+    { icon: "open", command: "open-project", label: t("打开项目"), disabled: inStudio && busy },
+    { icon: "save", command: "save-project", label: t("保存项目"), disabled: !inStudio || busy },
+    { icon: "add", command: "add-tracks", label: t("添加歌曲"), disabled: !inStudio || busy },
+    { icon: "export", command: "export-audio", label: t("导出音频"), disabled: !inStudio || busy }
   ];
 
   function renderMenuItems(items: MenuItem[], nested = false): ReactNode {
@@ -557,7 +616,20 @@ export function AppLayout() {
         <main className="application-content"><Outlet /></main>
 
         {uiPrefs.statusbar && <div className="status-bar application-status">
-          <p className="status-bar-field">{primaryStatus}</p>
+          <div className="status-bar-field status-primary-field">
+            <span>{primaryStatus}</span>
+            {busy && analysisTask && <>
+              <div
+                className="status-analysis-progress"
+                role="progressbar"
+                aria-label={t("分析进度")}
+                aria-valuenow={analysisPercent}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              ><span style={{ width: `${analysisPercent}%` }} /></div>
+              <button type="button" className="status-cancel-button" onClick={cancelAnalysis}>{t("停止")}</button>
+            </>}
+          </div>
           <p className="status-bar-field">{inStudio
             ? t("{count} 首歌曲 · {spm} SPM", { count: project.tracks.length, spm: project.targetSpm })
             : t("本地项目")}</p>
