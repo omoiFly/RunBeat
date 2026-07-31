@@ -124,7 +124,7 @@ describe("export selection", () => {
     await expect(renderProject({ ...project, tracks: [missing] }, () => undefined)).rejects.toThrow("需要重新关联原始文件");
   });
 
-  it("renders the two-pass low-memory path as chunked WAV", async () => {
+  it("renders the music-first low-memory path as chunked WAV", async () => {
     const project = createProject();
     project.exportSettings.includeBeat = true;
     project.exportSettings.format = "wav";
@@ -136,8 +136,8 @@ describe("export selection", () => {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     expect(new TextDecoder().decode(bytes.subarray(0, 4))).toBe("RIFF");
     expect(blob.size).toBe(44 + geometry.durationFrames * 2 * 2);
-    expect(messages).toContain("第一遍：测量整条时间线响度与真峰值");
-    expect(messages).toContain("第二遍：分块混音并写入 WAV");
+    expect(messages).toContain("第二遍：测量标准化歌曲与节拍的最终真峰值");
+    expect(messages).toContain("第三遍：写入峰值保护后的歌曲与节拍");
   });
 
   it("does not synthesize a beat-only file when the beat track is disabled", async () => {

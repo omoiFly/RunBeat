@@ -1,4 +1,9 @@
-import { IntegratedLoudnessMeter, TRUE_PEAK_CEILING_DBTP, TruePeakMeter } from "../audio/loudness";
+import {
+  IntegratedLoudnessMeter,
+  transparentLoudnessGain,
+  truePeakProtectionGain,
+  TruePeakMeter
+} from "../audio/loudness";
 import { mixPlannedTimeline, mixTimeline, planTimeline, type MixOptions, type RenderableTrack, type TimelineGeometry } from "../audio/mixer";
 import { streamPlannedTimeline } from "../audio/streamingMixer";
 import { encodeWav16, Wav16BlobEncoder } from "../audio/wav";
@@ -151,15 +156,6 @@ function mixOptionsFor(
   };
 }
 
-function transparentNormalizationGain(project: ProjectV1, inputLufs: number, inputTruePeak: number): number {
-  const requestedGain = project.exportSettings.normalizeLoudness && Number.isFinite(inputLufs)
-    ? 10 ** ((project.exportSettings.loudnessLufs - inputLufs) / 20)
-    : 1;
-  const ceiling = 10 ** (TRUE_PEAK_CEILING_DBTP / 20);
-  const peakGain = inputTruePeak > 0 ? ceiling / inputTruePeak * (1 - 1e-6) : requestedGain;
-  return Math.min(requestedGain, peakGain);
-}
-
 async function addTimelineArchive(
   audio: Blob,
   audioName: string,
@@ -252,6 +248,8 @@ export async function renderChunkedContinuousWav(
 ): Promise<Blob> {
   const workerPool = tracks.length ? createRenderWorkerPool(1, signal) : undefined;
   const options = mixOptionsFor(project, customBeatSample, geometry.durationFrames / project.exportSettings.sampleRate);
+  const hasMusic = geometry.entries.length > 0;
+  if (!hasMusic && !options.includeBeat) throw new Error("时间线中没有可渲染歌曲");
   const reportPassProgress = (base: number, span: number, stage: "normalize" | "mix", message: string, completedFrame: number) => {
     onProgress({
       jobId,
@@ -260,45 +258,98 @@ export async function renderChunkedContinuousWav(
       message
     });
   };
-  const loader = (pass: 1 | 2): ((trackIndex: number) => Promise<RenderableTrack>) => async (trackIndex) => {
+  const loader = (
+    pass: 1 | 2 | 3,
+    label: string,
+    base: number,
+    span: number
+  ): ((trackIndex: number) => Promise<RenderableTrack>) => async (trackIndex) => {
     const track = tracks[trackIndex];
     const entryStart = geometry.entries[trackIndex]?.startFrames ?? 0;
-    const passBase = pass === 1 ? 0 : 0.42;
     onProgress({
       jobId,
       stage: pass === 1 ? "normalize" : "stretch",
-      progress: passBase + 0.4 * entryStart / Math.max(1, geometry.durationFrames),
+      progress: base + span * entryStart / Math.max(1, geometry.durationFrames),
       trackId: track.id,
-      message: `${pass === 1 ? "响度预扫描" : "低内存渲染"} ${trackIndex + 1} / ${tracks.length} · ${track.source.fileName}`
+      message: `${label} ${trackIndex + 1} / ${tracks.length} · ${track.source.fileName}`
     });
     if (!workerPool) throw new Error("渲染工作线程不可用");
     return prepareOneTrack(track, project, workerPool.stretch, signal);
   };
 
   try {
-    const wav = new Wav16BlobEncoder(geometry.durationFrames, 2, project.exportSettings.sampleRate);
-    const loudness = new IntegratedLoudnessMeter(project.exportSettings.sampleRate);
-    const truePeak = new TruePeakMeter();
-    await streamPlannedTimeline(geometry, loader(1), options, (channels, startFrame) => {
-      loudness.push(channels);
-      truePeak.push(channels);
-      reportPassProgress(0, 0.4, "normalize", "第一遍：测量整条时间线响度与真峰值", startFrame + channels[0].length);
-    }, signal);
-    const inputLufs = loudness.value();
-    const inputTruePeak = truePeak.value();
-    const gain = transparentNormalizationGain(project, inputLufs, inputTruePeak);
-    const gainDb = 20 * Math.log10(gain);
+    let inputMusicLufs = Number.NEGATIVE_INFINITY;
+    let inputMusicTruePeak = 0;
+    if (hasMusic) {
+      const musicLoudness = new IntegratedLoudnessMeter(project.exportSettings.sampleRate);
+      const musicTruePeak = new TruePeakMeter();
+      await streamPlannedTimeline(
+        geometry,
+        loader(1, "纯歌曲响度预扫描", 0, 0.28),
+        { ...options, includeBeat: false, musicGain: 1 },
+        (channels, startFrame) => {
+          musicLoudness.push(channels);
+          musicTruePeak.push(channels);
+          reportPassProgress(0, 0.28, "normalize", "第一遍：测量纯歌曲响度与真峰值", startFrame + channels[0].length);
+        },
+        signal
+      );
+      inputMusicLufs = musicLoudness.value();
+      inputMusicTruePeak = musicTruePeak.value();
+    }
+
+    const musicGain = transparentLoudnessGain(
+      inputMusicLufs,
+      inputMusicTruePeak,
+      project.exportSettings.normalizeLoudness ? project.exportSettings.loudnessLufs : undefined
+    );
+    const musicGainDb = 20 * Math.log10(musicGain);
+    const beatReferenceLufs = Number.isFinite(inputMusicLufs)
+      ? inputMusicLufs + musicGainDb
+      : project.exportSettings.loudnessLufs;
     onProgress({
       jobId,
       stage: "normalize",
-      progress: 0.42,
-      message: `响度测量完成${Number.isFinite(inputLufs) ? ` · ${inputLufs.toFixed(1)} LUFS` : ""}${Number.isFinite(gainDb) ? ` · ${gainDb >= 0 ? "+" : ""}${gainDb.toFixed(1)} dB` : ""}`
+      progress: 0.3,
+      message: `纯歌曲响度测量完成${Number.isFinite(inputMusicLufs) ? ` · ${inputMusicLufs.toFixed(1)} LUFS` : ""}${Number.isFinite(musicGainDb) ? ` · ${musicGainDb >= 0 ? "+" : ""}${musicGainDb.toFixed(1)} dB` : ""}`
     });
 
-    await streamPlannedTimeline(geometry, loader(2), options, (channels, startFrame) => {
-      wav.push(channels, gain);
-      reportPassProgress(0.42, 0.4, "mix", "第二遍：分块混音并写入 WAV", startFrame + channels[0].length);
-    }, signal);
+    const mixedOptions: MixOptions = { ...options, musicGain, beatReferenceLufs };
+    let finalPeakGain = 1;
+    if (options.includeBeat) {
+      const finalTruePeak = new TruePeakMeter();
+      await streamPlannedTimeline(
+        geometry,
+        loader(2, "标准化歌曲与节拍峰值预扫描", 0.3, 0.26),
+        mixedOptions,
+        (channels, startFrame) => {
+          finalTruePeak.push(channels);
+          reportPassProgress(0.3, 0.26, "mix", "第二遍：测量标准化歌曲与节拍的最终真峰值", startFrame + channels[0].length);
+        },
+        signal
+      );
+      finalPeakGain = truePeakProtectionGain(finalTruePeak.value());
+    } else {
+      finalPeakGain = truePeakProtectionGain(inputMusicTruePeak * musicGain);
+    }
+
+    const wav = new Wav16BlobEncoder(geometry.durationFrames, 2, project.exportSettings.sampleRate);
+    const outputPass = options.includeBeat ? 3 : 2;
+    const outputBase = options.includeBeat ? 0.58 : 0.32;
+    const outputSpan = options.includeBeat ? 0.24 : 0.5;
+    const outputMessage = options.includeBeat
+      ? "第三遍：写入峰值保护后的歌曲与节拍"
+      : "第二遍：写入标准化歌曲";
+    await streamPlannedTimeline(
+      geometry,
+      loader(outputPass, "低内存最终渲染", outputBase, outputSpan),
+      mixedOptions,
+      (channels, startFrame) => {
+        wav.push(channels, finalPeakGain);
+        reportPassProgress(outputBase, outputSpan, "mix", outputMessage, startFrame + channels[0].length);
+      },
+      signal
+    );
     return wav.finish();
   } finally {
     workerPool?.dispose();

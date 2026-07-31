@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BeatTrackSettings } from "../domain/types";
+import { IntegratedLoudnessMeter, transparentLoudnessGain, truePeakProtectionGain, TruePeakMeter } from "./loudness";
 import { mixPlannedTimeline, planTimeline, planTimelineGeometry, type MixOptions, type RenderableTrack } from "./mixer";
 import { streamPlannedTimeline } from "./streamingMixer";
 
@@ -61,5 +62,72 @@ describe("streaming timeline mixer", () => {
     expect(loadOrder).toEqual([0, 1, 2]);
     expect(actual[0]).toEqual(expected[0]);
     expect(actual[1]).toEqual(expected[1]);
+  });
+
+  it("matches the music-first in-memory pipeline when a calibrated beat is included", async () => {
+    const sources = [track(44_100, undefined)];
+    const options: MixOptions = {
+      sampleRate: 44_100,
+      targetSpm: 180,
+      transitionBars: 0,
+      beatTrack: { ...beatTrack, gainDb: -10 },
+      normalizeLoudness: true,
+      loudnessLufs: -20,
+      includeBeat: true
+    };
+    const expected = mixPlannedTimeline(planTimeline(sources.map(cloneTrack), options), options);
+    const geometry = planTimelineGeometry(sources.map((source) => ({
+      frameCount: source.channels[0].length,
+      phaseOffsetSeconds: source.phaseOffsetSeconds,
+      phaseNudgeBeats: source.phaseNudgeBeats
+    })), options);
+
+    const musicLoudness = new IntegratedLoudnessMeter(options.sampleRate);
+    const musicTruePeak = new TruePeakMeter();
+    await streamPlannedTimeline(
+      geometry,
+      async (index) => cloneTrack(sources[index]),
+      { ...options, includeBeat: false },
+      (channels) => {
+        musicLoudness.push(channels);
+        musicTruePeak.push(channels);
+      }
+    );
+    const inputMusicLufs = musicLoudness.value();
+    const musicGain = transparentLoudnessGain(inputMusicLufs, musicTruePeak.value(), options.loudnessLufs);
+    const mixedOptions: MixOptions = {
+      ...options,
+      musicGain,
+      beatReferenceLufs: inputMusicLufs + 20 * Math.log10(musicGain)
+    };
+    const finalTruePeak = new TruePeakMeter();
+    await streamPlannedTimeline(
+      geometry,
+      async (index) => cloneTrack(sources[index]),
+      mixedOptions,
+      (channels) => finalTruePeak.push(channels)
+    );
+    const finalGain = truePeakProtectionGain(finalTruePeak.value());
+    const actual = [new Float32Array(geometry.durationFrames), new Float32Array(geometry.durationFrames)];
+    await streamPlannedTimeline(
+      geometry,
+      async (index) => cloneTrack(sources[index]),
+      mixedOptions,
+      (channels, startFrame) => {
+        for (let channel = 0; channel < channels.length; channel += 1) {
+          for (let frame = 0; frame < channels[channel].length; frame += 1) {
+            actual[channel][startFrame + frame] = channels[channel][frame] * finalGain;
+          }
+        }
+      }
+    );
+
+    let maximumDifference = 0;
+    for (let channel = 0; channel < actual.length; channel += 1) {
+      for (let frame = 0; frame < actual[channel].length; frame += 1) {
+        maximumDifference = Math.max(maximumDifference, Math.abs(actual[channel][frame] - expected[channel][frame]));
+      }
+    }
+    expect(maximumDifference).toBeLessThan(1e-6);
   });
 });

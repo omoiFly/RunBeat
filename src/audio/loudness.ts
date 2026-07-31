@@ -52,6 +52,27 @@ function gainToDb(gain: number): number {
   return gain > 0 ? 20 * Math.log10(gain) : Number.NEGATIVE_INFINITY;
 }
 
+/** Chooses one static music-bus gain without using the final mix limiter. */
+export function transparentLoudnessGain(
+  inputLufs: number,
+  inputTruePeak: number,
+  targetLufs?: number
+): number {
+  if (targetLufs == null || !Number.isFinite(inputLufs)) return 1;
+  const requestedGain = 10 ** ((targetLufs - inputLufs) / 20);
+  if (!(inputTruePeak > 0)) return requestedGain;
+  const ceiling = 10 ** (TRUE_PEAK_CEILING_DBTP / 20);
+  const peakGain = ceiling / inputTruePeak * TRUE_PEAK_SAFETY;
+  return Math.min(requestedGain, peakGain);
+}
+
+/** Returns one static correction that keeps an already mixed signal below the true-peak ceiling. */
+export function truePeakProtectionGain(inputTruePeak: number): number {
+  if (!(inputTruePeak > 0)) return 1;
+  const ceiling = 10 ** (TRUE_PEAK_CEILING_DBTP / 20);
+  return Math.min(1, ceiling / inputTruePeak * TRUE_PEAK_SAFETY);
+}
+
 function energyToLufs(energy: number): number {
   return energy > 0 ? LOUDNESS_OFFSET + 10 * Math.log10(energy) : Number.NEGATIVE_INFINITY;
 }
@@ -311,7 +332,7 @@ function measureSamplePeak(channels: Float32Array[], frameCount: number): number
   return peak;
 }
 
-function applyGain(channels: Float32Array[], frameCount: number, gain: number): void {
+export function applyGain(channels: Float32Array[], frameCount: number, gain: number): void {
   if (gain === 1) return;
   for (const channel of channels) {
     for (let frame = 0; frame < frameCount; frame += 1) channel[frame] *= gain;

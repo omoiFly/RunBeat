@@ -1,6 +1,15 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { clampTargetSpm, MAX_TARGET_SPM, MIN_TARGET_SPM, type BeatTrackSettings, type MappingMode, type ProjectV1 } from "../../domain/types";
+import {
+  clampTargetSpm,
+  MAX_BEAT_TRACK_GAIN_DB,
+  MAX_TARGET_SPM,
+  MIN_BEAT_TRACK_GAIN_DB,
+  MIN_TARGET_SPM,
+  type BeatTrackSettings,
+  type MappingMode,
+  type ProjectV1
+} from "../../domain/types";
 import { useI18n } from "../../i18n";
 import { BEAT_PREVIEW_SECONDS, playBeatPreview, stopPreview } from "../../services/preview";
 import { ClassicIcon } from "../ClassicIcon";
@@ -293,18 +302,19 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
                         }}
                       />
                     </div>
-                    <label htmlFor="project-property-gain">{t("音量:")}</label>
+                    <label htmlFor="project-property-gain">{t("相对音量:")}</label>
                     <div className="range-with-value">
                       <input
                         id="project-property-gain"
                         data-help="beat-volume"
                         type="range"
-                        min={-30}
-                        max={0}
+                        min={MIN_BEAT_TRACK_GAIN_DB}
+                        max={MAX_BEAT_TRACK_GAIN_DB}
+                        step={1}
                         value={draft.beatTrack.gainDb}
                         onChange={(event) => updateBeat({ gainDb: Number(event.target.value) })}
                       />
-                      <span>{draft.beatTrack.gainDb} dB</span>
+                      <span>{draft.beatTrack.gainDb > 0 ? "+" : ""}{draft.beatTrack.gainDb} dB</span>
                     </div>
                     <label htmlFor="project-property-accent">{t("重拍:")}</label>
                     <select

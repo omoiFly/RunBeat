@@ -1,7 +1,13 @@
 import type { BeatTrackSettings } from "../domain/types";
-import { generateBeatTrack, type BeatSample } from "./beatTrack";
+import { beatTrackGainForReference, generateBeatTrack, type BeatSample } from "./beatTrack";
 import { equalPowerGains, transitionDurationSeconds } from "./grid";
-import { normalizeAndLimit } from "./loudness";
+import {
+  applyGain,
+  measureIntegratedLoudness,
+  measureTruePeak,
+  transparentLoudnessGain,
+  truePeakProtectionGain
+} from "./loudness";
 
 export { normalizeAndLimit } from "./loudness";
 
@@ -21,6 +27,10 @@ export interface MixOptions {
   loudnessLufs: number;
   includeBeat: boolean;
   minimumDurationSeconds?: number;
+  /** Internal streaming-pass gain applied only to the music bus. */
+  musicGain?: number;
+  /** Actual post-normalization music loudness used to calibrate the beat bus. */
+  beatReferenceLufs?: number;
 }
 
 export interface TimelineEntry {
@@ -125,20 +135,40 @@ export function mixPlannedTimeline(plan: TimelinePlan, options: MixOptions): Flo
       output[1][start + frame] += (channels[1] ?? channels[0])[frame] * gain;
     }
   });
+
+  const inputMusicLufs = measureIntegratedLoudness(output, options.sampleRate);
+  const musicGain = transparentLoudnessGain(
+    inputMusicLufs,
+    measureTruePeak(output),
+    options.normalizeLoudness ? options.loudnessLufs : undefined
+  );
+  applyGain(output, durationFrames, musicGain);
+  const musicReferenceLufs = Number.isFinite(inputMusicLufs)
+    ? inputMusicLufs + 20 * Math.log10(musicGain)
+    : options.loudnessLufs;
+
   if (options.includeBeat) {
     const beat = generateBeatTrack(
       durationFrames / options.sampleRate,
       options.targetSpm,
       options.sampleRate,
-      options.beatTrack,
+      { ...options.beatTrack, gainDb: 0 },
       0,
       options.customBeatSample
     );
+    const beatGain = beatTrackGainForReference(
+      options.beatTrack,
+      options.sampleRate,
+      musicReferenceLufs,
+      options.customBeatSample
+    );
     for (let channel = 0; channel < 2; channel += 1) {
-      for (let frame = 0; frame < durationFrames; frame += 1) output[channel][frame] += beat[channel][frame];
+      for (let frame = 0; frame < durationFrames; frame += 1) {
+        output[channel][frame] += beat[channel][frame] * beatGain;
+      }
     }
   }
-  normalizeAndLimit(output, options.sampleRate, options.normalizeLoudness ? options.loudnessLufs : undefined);
+  applyGain(output, durationFrames, truePeakProtectionGain(measureTruePeak(output)));
   return output;
 }
 

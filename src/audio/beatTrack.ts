@@ -1,5 +1,10 @@
 import type { BeatTrackSettings } from "../domain/types";
 import { dbToGain } from "./grid";
+import { measureTruePeak, TRUE_PEAK_CEILING_DBTP } from "./loudness";
+
+export const BEAT_TRACK_ZERO_DB_PROMINENCE_DB = 10;
+export const BEAT_TRACK_LEGACY_ZERO_DB_BOOST_DB = 10;
+export const BEAT_TRACK_LEGACY_REFERENCE_LUFS = -14;
 
 export interface BeatSample {
   channels: Float32Array[];
@@ -182,6 +187,45 @@ export function generateBeatHit(
     addPulse(target[1], 0, 0, sampleRate, profile[0] / footVariation, gain * accent, profile[1], beat, 1);
   }
   return target;
+}
+
+/**
+ * Returns the gain for a beat rendered at 0 dB so the project control is
+ * referenced to the normalized music bus. The music-relative anchor places a
+ * 0 dB hit 10 dB above that reference, up to the true-peak ceiling. A legacy
+ * calibration floor can raise it further: at the default -14 LUFS reference,
+ * calibration never falls below +10 dB, so the new -10 dB
+ * default retains at least the old raw 0 dB beat strength and the new 0 dB
+ * setting is at least 10 dB stronger. The floor tracks other music references
+ * by the same dB delta so the beat-to-music relationship remains stable. Final
+ * mix peak protection keeps the exported signal within the true-peak ceiling.
+ */
+export function beatTrackGainForReference(
+  settings: BeatTrackSettings,
+  sampleRate: number,
+  musicReferenceLufs: number,
+  customSample?: BeatSample
+): number {
+  const referenceSettings: BeatTrackSettings = { ...settings, gainDb: 0 };
+  const patternBeats = Math.max(16, settings.accentEvery || 1);
+  let referencePeak = 0;
+  for (let beat = 0; beat < patternBeats; beat += 1) {
+    referencePeak = Math.max(
+      referencePeak,
+      measureTruePeak(generateBeatHit(beat, sampleRate, referenceSettings, customSample))
+    );
+  }
+  if (!(referencePeak > 0)) return 0;
+  const zeroDbPeakDbfs = Math.min(
+    TRUE_PEAK_CEILING_DBTP,
+    musicReferenceLufs + BEAT_TRACK_ZERO_DB_PROMINENCE_DB
+  );
+  const musicRelativeCalibration = dbToGain(zeroDbPeakDbfs) / referencePeak;
+  const referenceShiftDb = Number.isFinite(musicReferenceLufs)
+    ? musicReferenceLufs - BEAT_TRACK_LEGACY_REFERENCE_LUFS
+    : 0;
+  const legacyCalibrationFloor = dbToGain(BEAT_TRACK_LEGACY_ZERO_DB_BOOST_DB + referenceShiftDb);
+  return Math.max(musicRelativeCalibration, legacyCalibrationFloor) * dbToGain(settings.gainDb);
 }
 
 /** Generates a slice of the absolute master beat grid without resetting accents or left/right feet. */

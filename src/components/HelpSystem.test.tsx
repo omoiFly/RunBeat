@@ -75,7 +75,11 @@ describe("help topics", () => {
 
     fireEvent.click(screen.getByRole("treeitem", { name: "项目配置说明" }));
     expect(screen.getByRole("table", { name: "项目常规配置" })).toHaveTextContent("60～230 SPM");
-    expect(screen.getByRole("table", { name: "项目节拍轨配置" })).toHaveTextContent("每组第 1 步加强");
+    const beatSettings = screen.getByRole("table", { name: "项目节拍轨配置" });
+    expect(beatSettings).toHaveTextContent("每组第 1 步加强");
+    expect(beatSettings).toHaveTextContent("-40～+10 dB");
+    expect(beatSettings).toHaveTextContent("默认 -10 dB");
+    expect(beatSettings).toHaveTextContent("歌曲会先按导出目标响度标准化");
 
     fireEvent.click(screen.getByRole("treeitem", { name: "歌曲编排与排序" }));
     expect(screen.getByText(/拖拽一首歌曲可调整播放顺序/)).toBeInTheDocument();

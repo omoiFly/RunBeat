@@ -157,6 +157,48 @@ async function settle(turns = 20): Promise<void> {
   for (let turn = 0; turn < turns; turn += 1) await Promise.resolve();
 }
 
+function rootMeanSquare(channels: Float32Array[]): number {
+  let sum = 0;
+  let samples = 0;
+  for (const channel of channels) {
+    for (const sample of channel) {
+      sum += sample * sample;
+      samples += 1;
+    }
+  }
+  return Math.sqrt(sum / samples);
+}
+
+function maximumMagnitude(channels: Float32Array[]): number {
+  let peak = 0;
+  for (const channel of channels) {
+    for (const sample of channel) peak = Math.max(peak, Math.abs(sample));
+  }
+  return peak;
+}
+
+describe("independent beat preview", () => {
+  it("preserves both 10 dB steps across the extended range without clipping", async () => {
+    const { generateBeatPreviewChannels } = await import("./preview");
+    const project = createProject("Test");
+    expect(project.exportSettings.normalizeLoudness).toBe(true);
+
+    const baseline = generateBeatPreviewChannels(project);
+    const zero = generateBeatPreviewChannels({
+      ...project,
+      beatTrack: { ...project.beatTrack, gainDb: 0 }
+    });
+    const maximum = generateBeatPreviewChannels({
+      ...project,
+      beatTrack: { ...project.beatTrack, gainDb: 10 }
+    });
+
+    expect(rootMeanSquare(zero) / rootMeanSquare(baseline)).toBeCloseTo(10 ** (10 / 20), 5);
+    expect(rootMeanSquare(maximum) / rootMeanSquare(zero)).toBeCloseTo(10 ** (10 / 20), 5);
+    expect(maximumMagnitude(maximum)).toBeLessThanOrEqual(10 ** (-1 / 20));
+  });
+});
+
 describe("continuous track preview", () => {
   let context: FakeAudioContext;
 
@@ -187,6 +229,36 @@ describe("continuous track preview", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it("normalizes processed music before applying the stable relative beat level", async () => {
+    const decodedAt = (amplitude: number) => ({
+      channels: [
+        Float32Array.from({ length: 200 }, (_, frame) => amplitude * Math.sin(frame)),
+        Float32Array.from({ length: 200 }, (_, frame) => amplitude * Math.sin(frame))
+      ],
+      mono: new Float32Array(0),
+      sampleRate: 10,
+      duration: 20
+    });
+    const { startPreview } = await import("./preview");
+    const project = createProject("Test");
+
+    serviceMocks.decodeFile.mockResolvedValueOnce(decodedAt(0.01));
+    const quietSession = startPreview(makeTrack(), project, "processed-beat", 0);
+    await settle();
+    const quietMusicGain = context.gains.at(-3)?.gain.value ?? 0;
+    const quietBeatGain = context.gains.at(-2)?.gain.value ?? 0;
+    quietSession.stop();
+
+    serviceMocks.decodeFile.mockResolvedValueOnce(decodedAt(0.1));
+    startPreview(makeTrack(), project, "processed-beat", 0);
+    await settle();
+    const loudMusicGain = context.gains.at(-3)?.gain.value ?? 0;
+    const loudBeatGain = context.gains.at(-2)?.gain.value ?? 0;
+
+    expect(20 * Math.log10(quietMusicGain / loudMusicGain)).toBeCloseTo(20, 3);
+    expect(quietBeatGain).toBeCloseTo(loudBeatGain, 6);
   });
 
   it("keeps scheduling original-audio chunks beyond the initial buffer until the trim out point", async () => {

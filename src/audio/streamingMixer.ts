@@ -1,4 +1,4 @@
-import { generateBeatTrackRange } from "./beatTrack";
+import { beatTrackGainForReference, generateBeatTrackRange } from "./beatTrack";
 import { equalPowerGains, transitionDurationSeconds } from "./grid";
 import type { MixOptions, RenderableTrack, TimelineGeometry } from "./mixer";
 
@@ -24,6 +24,15 @@ export async function streamPlannedTimeline(
 ): Promise<void> {
   if (!geometry.entries.length && !options.includeBeat) throw new Error("时间线中没有可渲染歌曲");
   const transitionFrames = Math.round(transitionDurationSeconds(options.transitionBars, options.targetSpm) * options.sampleRate);
+  const musicGain = options.musicGain ?? 1;
+  const beatGain = options.includeBeat
+    ? beatTrackGainForReference(
+        options.beatTrack,
+        options.sampleRate,
+        options.beatReferenceLufs ?? options.loudnessLufs,
+        options.customBeatSample
+      )
+    : 0;
   let bufferStart = 0;
   let left = new Float32Array(0);
   let right = new Float32Array(0);
@@ -46,12 +55,12 @@ export async function streamPlannedTimeline(
           frames,
           options.targetSpm,
           options.sampleRate,
-          options.beatTrack,
+          { ...options.beatTrack, gainDb: 0 },
           options.customBeatSample
         );
         for (let frame = 0; frame < frames; frame += 1) {
-          chunk[0][frame] += beat[0][frame];
-          chunk[1][frame] += beat[1][frame];
+          chunk[0][frame] += beat[0][frame] * beatGain;
+          chunk[1][frame] += beat[1][frame] * beatGain;
         }
       }
       await consume(chunk, cursor);
@@ -99,8 +108,8 @@ export async function streamPlannedTimeline(
       let gain = 1;
       if (previousOverlap && frame < previousOverlap) gain *= equalPowerGains(frame / previousOverlap)[1];
       if (nextOverlap && frame >= alignedFrames - nextOverlap) gain *= equalPowerGains((frame - (alignedFrames - nextOverlap)) / nextOverlap)[0];
-      left[frame] += sourceLeft[sourceFrame] * gain;
-      right[frame] += sourceRight[sourceFrame] * gain;
+      left[frame] += sourceLeft[sourceFrame] * gain * musicGain;
+      right[frame] += sourceRight[sourceFrame] * gain * musicGain;
     }
     track.channels.length = 0;
   }

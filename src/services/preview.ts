@@ -1,8 +1,9 @@
-import { generateBeatHit, type BeatSample } from "../audio/beatTrack";
+import { beatTrackGainForReference, generateBeatHit, generateBeatTrack, type BeatSample } from "../audio/beatTrack";
 import { beatGridPhaseAfterSourceOffset } from "../audio/bpm";
-import { mixTimeline } from "../audio/mixer";
+import { dbToGain } from "../audio/grid";
+import { measureIntegratedLoudness, measureTruePeak, truePeakProtectionGain } from "../audio/loudness";
 import { encodeWav16 } from "../audio/wav";
-import type { ProjectV1, Track } from "../domain/types";
+import { MAX_BEAT_TRACK_GAIN_DB, type ProjectV1, type Track } from "../domain/types";
 import type { PreviewWorkerCommand, PreviewWorkerEvent } from "../workers/previewProtocol";
 import { decodeFile, type DecodedAudio } from "./audio";
 import { getCustomBeatSample } from "./customBeat";
@@ -74,6 +75,46 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Renders the independent beat preview against the project's normalized music
+ * target. One fixed headroom gain is derived from the +10 dB endpoint and then
+ * shared by every slider value. This preserves the full dB differences in the
+ * solo preview while keeping its temporary 16-bit WAV below the peak ceiling.
+ */
+export function generateBeatPreviewChannels(
+  project: ProjectV1,
+  customBeatSample?: BeatSample
+): [Float32Array, Float32Array] {
+  const sampleRate = project.exportSettings.sampleRate;
+  const channels = generateBeatTrack(
+    BEAT_PREVIEW_SECONDS,
+    project.targetSpm,
+    sampleRate,
+    { ...project.beatTrack, gainDb: 0 },
+    0,
+    customBeatSample
+  );
+  const outputGain = beatTrackGainForReference(
+    project.beatTrack,
+    sampleRate,
+    project.exportSettings.loudnessLufs,
+    customBeatSample
+  );
+  const maximumGain = beatTrackGainForReference(
+    { ...project.beatTrack, gainDb: MAX_BEAT_TRACK_GAIN_DB },
+    sampleRate,
+    project.exportSettings.loudnessLufs,
+    customBeatSample
+  );
+  const previewHeadroomGain = truePeakProtectionGain(measureTruePeak(channels) * maximumGain);
+  for (const channel of channels) {
+    for (let frame = 0; frame < channel.length; frame += 1) {
+      channel[frame] *= outputGain * previewHeadroomGain;
+    }
+  }
+  return channels;
+}
+
 function audioBufferFromChannels(
   context: AudioContext,
   channels: Float32Array[],
@@ -108,6 +149,7 @@ class ContinuousTrackPreview implements TrackPreviewSession {
   private readonly beatSources = new Set<ScheduledBeat>();
   private readonly context: AudioContext;
   private readonly musicBus: GainNode;
+  private readonly beatBus: GainNode;
   private readonly master: GainNode;
   private readonly compressor: DynamicsCompressorNode;
   private readonly monitor: ReturnType<typeof setInterval>;
@@ -171,9 +213,11 @@ class ContinuousTrackPreview implements TrackPreviewSession {
     };
     this.context = getPreviewAudioContext();
     this.musicBus = this.context.createGain();
+    this.beatBus = this.context.createGain();
     this.master = this.context.createGain();
     this.compressor = this.context.createDynamicsCompressor();
     this.musicBus.connect(this.master);
+    this.beatBus.connect(this.master);
     this.master.connect(this.compressor);
     this.compressor.connect(this.context.destination);
     this.master.gain.value = PREVIEW_MASTER_GAIN;
@@ -233,6 +277,7 @@ class ContinuousTrackPreview implements TrackPreviewSession {
     this.worker?.terminate();
     this.worker = undefined;
     this.musicBus.disconnect();
+    this.beatBus.disconnect();
     this.master.disconnect();
     this.compressor.disconnect();
     this.updateSnapshot({ status: "ended" });
@@ -260,6 +305,28 @@ class ContinuousTrackPreview implements TrackPreviewSession {
       if (this.mode === "original") {
         this.restartRender(this.sessionSourceStart);
         return;
+      }
+
+      const startFrame = Math.round(this.sourceInSeconds * decoded.sampleRate);
+      const endFrame = Math.round(this.sourceOutSeconds * decoded.sampleRate);
+      const musicLufs = measureIntegratedLoudness(
+        decoded.channels.map((channel) => channel.subarray(startFrame, endFrame)),
+        decoded.sampleRate
+      );
+      const requestedMusicGainDb = this.project.exportSettings.normalizeLoudness && Number.isFinite(musicLufs)
+        ? this.project.exportSettings.loudnessLufs - musicLufs
+        : 0;
+      this.musicBus.gain.value = dbToGain(requestedMusicGainDb);
+      const beatReferenceLufs = Number.isFinite(musicLufs)
+        ? musicLufs + requestedMusicGainDb
+        : this.project.exportSettings.loudnessLufs;
+      if (this.mode === "processed-beat") {
+        this.beatBus.gain.value = beatTrackGainForReference(
+          this.project.beatTrack,
+          this.context.sampleRate,
+          beatReferenceLufs,
+          this.customBeatSample
+        );
       }
 
       const worker = new Worker(new URL("../workers/preview.worker.ts", import.meta.url), { type: "module" });
@@ -619,7 +686,7 @@ class ContinuousTrackPreview implements TrackPreviewSession {
       if (when < this.context.currentTime + 0.005) continue;
       const source = this.context.createBufferSource();
       source.buffer = this.beatBuffer(beat);
-      source.connect(this.master);
+      source.connect(this.beatBus);
       const scheduled: ScheduledBeat = { source, when };
       source.onended = () => {
         source.disconnect();
@@ -638,7 +705,7 @@ class ContinuousTrackPreview implements TrackPreviewSession {
     const channels = generateBeatHit(
       beat,
       this.context.sampleRate,
-      this.project.beatTrack,
+      { ...this.project.beatTrack, gainDb: 0 },
       this.customBeatSample
     );
     const buffer = audioBufferFromChannels(this.context, channels, this.context.sampleRate);
@@ -731,17 +798,7 @@ export async function playBeatPreview(project: ProjectV1): Promise<void> {
     throw new Error("自定义鼓点文件不可用，请重新上传后试听");
   }
   const sampleRate = project.exportSettings.sampleRate;
-  const channels = mixTimeline([], {
-    sampleRate,
-    targetSpm: project.targetSpm,
-    transitionBars: project.transitionBars,
-    beatTrack: project.beatTrack,
-    customBeatSample,
-    normalizeLoudness: project.exportSettings.normalizeLoudness,
-    loudnessLufs: project.exportSettings.loudnessLufs,
-    includeBeat: true,
-    minimumDurationSeconds: BEAT_PREVIEW_SECONDS
-  });
+  const channels = generateBeatPreviewChannels(project, customBeatSample);
   if (generation !== previewGeneration) return;
   const blob = encodeWav16({ channels, sampleRate });
   beatPreviewUrl = URL.createObjectURL(blob);

@@ -77,9 +77,10 @@ export function recommendedRenderConcurrency(
 }
 
 /**
- * Above this final Float32 timeline size, exporting switches to the two-pass
- * chunked pipeline. The threshold is intentionally well below total device
- * memory because decoding, WASM and browser Blob storage need headroom too.
+ * Above this final Float32 timeline size, exporting switches to the multi-pass
+ * chunked pipeline. Beat-enabled exports need separate music-loudness and final
+ * true-peak scans. The threshold stays well below total device memory because
+ * decoding, WASM and browser Blob storage need headroom too.
  */
 export function maximumInMemoryRenderBytes(
   profile: ClientPerformanceProfile = currentClientPerformanceProfile()

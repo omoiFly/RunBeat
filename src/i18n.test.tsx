@@ -29,8 +29,13 @@ describe("runtime message translations", () => {
     ["2 路并行 · 保持音高变速 如意往事.mp3", "2 parallel workers · Pitch-preserving stretch · 如意往事.mp3"],
     ["2 路并行 · 处理 1 / 3 · 如意往事.mp3", "2 parallel workers · Processing 1 / 3 · 如意往事.mp3"],
     ["编码 MP3 2 / 3", "Encoding MP3 2 / 3"],
-    ["响度预扫描 1 / 3 · 如意往事.mp3", "Loudness pre-scan 1 / 3 · 如意往事.mp3"],
-    ["响度测量完成 · -14.2 LUFS · +1.0 dB", "Loudness measurement complete · -14.2 LUFS · +1.0 dB"],
+    ["纯歌曲响度预扫描 1 / 3 · 如意往事.mp3", "Music-only loudness pre-scan 1 / 3 · 如意往事.mp3"],
+    ["标准化歌曲与节拍峰值预扫描 1 / 3 · 如意往事.mp3", "Normalized music and beat peak pre-scan 1 / 3 · 如意往事.mp3"],
+    ["低内存最终渲染 1 / 3 · 如意往事.mp3", "Low-memory final render 1 / 3 · 如意往事.mp3"],
+    ["纯歌曲响度测量完成 · -14.2 LUFS · +1.0 dB", "Music-only loudness measurement complete · -14.2 LUFS · +1.0 dB"],
+    ["第一遍：测量纯歌曲响度与真峰值", "Pass 1: Measuring music-only loudness and true peak"],
+    ["第二遍：测量标准化歌曲与节拍的最终真峰值", "Pass 2: Measuring the final true peak of normalized music and beat"],
+    ["第三遍：写入峰值保护后的歌曲与节拍", "Pass 3: Writing peak-protected music and beat"],
     ["编码 MP3（192 kbps）", "Encoding MP3 (192 kbps)"]
   ])("translates export progress while preserving the file name: %s", (message, expected) => {
     render(<LanguageProvider><RuntimeMessage>{message}</RuntimeMessage></LanguageProvider>);

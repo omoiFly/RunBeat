@@ -50,16 +50,16 @@ const HELP_ENGLISH: Record<string, string> = {
   "声音": "Sound",
   "选择内置脚步、鼓点、Click 或自定义单次声音；自定义文件不会嵌入项目备份。":
     "Choose a built-in footstep, drum, click, or custom one-shot. Custom audio is not embedded in project backups.",
-  "音量": "Volume",
-  "节拍轨相对音乐的增益，范围 -30～0 dB；0 dB 表示不衰减，并不保证不会掩盖音乐。":
-    "Beat-track gain relative to the music, from -30 to 0 dB. 0 dB means no attenuation and does not guarantee that the beat will not mask the music.",
+  "相对音量": "Relative Volume",
+  "歌曲会先按导出目标响度标准化，再叠加节拍。范围为 -40～+10 dB；默认 -10 dB 保留原有 0 dB 的基础节拍强度，当前 0 dB 在此基础上再突出 10 dB，+10 dB 则突出 20 dB。高增益触发真峰值保护时，歌曲与节拍会一起降低电平。关闭响度标准化时则以歌曲实测响度为基准。":
+    "The music is normalized to the export loudness target before the beat is added. The range is -40 to +10 dB. The -10 dB default retains the former 0 dB baseline beat strength; the current 0 dB is 10 dB more prominent and +10 dB is 20 dB more prominent than that baseline. If high gain triggers true-peak protection, music and beat are turned down together. When loudness normalization is off, the measured music loudness is used instead.",
   "重拍": "Accent",
   "按每 4、8 或 16 步为脚步分组，将每组第 1 步加强；“无重拍”让所有步骤相同。":
     "Groups footsteps in sets of 4, 8, or 16 and strengthens the first step of each group. No accent keeps every step the same.",
   "让相邻脚步略偏向左右不同声道，帮助区分左右脚；扬声器下可能不如耳机明显。":
     "Biases adjacent footsteps slightly toward opposite stereo channels to distinguish left and right feet. The effect may be less obvious on speakers than headphones.",
-  "播放约 6 秒独立节拍轨，用于在混入歌曲前检查音色、音量、重拍和左右脚效果。":
-    "Plays about six seconds of the beat track by itself so you can check its sound, volume, accent, and left/right effect before mixing it with music.",
+  "播放约 6 秒独立节拍轨，并以当前导出响度作为歌曲参考，用于在混入歌曲前检查音色、相对音量、重拍和左右脚效果。":
+    "Plays about six seconds of the beat track by itself using the current export loudness as the music reference, so you can check its sound, relative volume, accent, and left/right effect before mixing it with music.",
 
   "分析指标说明": "Analysis Metrics",
   "分析结果描述原曲节奏、目标步频与处理后固定步点网格之间的关系。":
@@ -182,8 +182,8 @@ const HELP_ENGLISH: Record<string, string> = {
     "The current accent uses the same sound at 35% higher amplitude (about +2.6 dB), so it may be subtle against loud music.",
   "左右脚声道交替会让奇偶脚步略偏向不同声道，耳机下更容易分辨。":
     "Left/right alternation biases odd and even footsteps slightly toward opposite channels and is easier to hear on headphones.",
-  "节拍轨音量是相对音乐的增益；试听时应以能辨认但不掩盖音乐为准。":
-    "Beat-track volume is gain relative to the music. Set it high enough to recognize without masking the track.",
+  "节拍轨以标准化后的歌曲响度为参考。默认 -10 dB 保留原有 0 dB 的基础节拍强度，当前 0 dB 在此基础上再突出 10 dB，+10 dB 则突出 20 dB。高增益可能触发整体真峰值保护，但节拍相对歌曲的差值不变；试听时应以能辨认但不掩盖音乐为准。":
+    "The beat track is referenced to normalized music loudness. The -10 dB default retains the former 0 dB baseline beat strength; the current 0 dB is 10 dB more prominent and +10 dB is 20 dB more prominent than that baseline. High gain may trigger whole-mix true-peak protection, but the beat-to-music difference is preserved. Keep it recognizable without masking the music.",
 
   "项目保存与原文件": "Project Saving and Original Files",
   "加入第一首歌曲后，项目会按“歌曲名”或“歌曲名 等 X 首”自动命名并保存到当前浏览器；后续更改也会自动保存。Ctrl+S 可立即保存，Ctrl+Shift+S 可另存副本。":
@@ -562,7 +562,7 @@ const ENGLISH: Record<string, string> = {
   "自定义鼓点": "Custom Beat",
   "更换...": "Change...",
   "自定义...": "Custom...",
-  "音量:": "Volume:",
+  "相对音量:": "Relative volume:",
   "重拍:": "Accent:",
   "无重拍": "No accent",
   "每 {count} 步": "Every {count} steps",
@@ -628,8 +628,10 @@ const ENGLISH: Record<string, string> = {
   "启用低内存分块导出": "Using low-memory chunked export",
   "混合时间线和固定节拍": "Mixing the timeline and fixed beat track",
   "混合时间线": "Mixing the timeline",
-  "第一遍：测量整条时间线响度与真峰值": "Pass 1: Measuring timeline loudness and true peak",
-  "第二遍：分块混音并写入 WAV": "Pass 2: Mixing in chunks and writing WAV",
+  "第一遍：测量纯歌曲响度与真峰值": "Pass 1: Measuring music-only loudness and true peak",
+  "第二遍：测量标准化歌曲与节拍的最终真峰值": "Pass 2: Measuring the final true peak of normalized music and beat",
+  "第三遍：写入峰值保护后的歌曲与节拍": "Pass 3: Writing peak-protected music and beat",
+  "第二遍：写入标准化歌曲": "Pass 2: Writing normalized music",
   "流式打包视频与时间轴": "Streaming video and timelines into the archive",
   "流式打包音频与时间轴": "Streaming audio and timelines into the archive",
   "文件已开始下载。最终时长 {duration}。": "The download has started. Final duration: {duration}.",
@@ -668,7 +670,8 @@ const ENGLISH: Record<string, string> = {
     "Set the asymmetric tempo range for automatically including newly analyzed tracks: slowdown is stricter and speed-up is more permissive. Later manual choices are not overwritten.",
   "选择叠加到音乐上的全局脚步提示。可以先播放六秒独立节拍进行试听。":
     "Choose the global footstep cue mixed over the music. You can preview six seconds of the beat by itself.",
-  "调整全局节拍轨相对于歌曲的音量。": "Adjust the global beat-track volume relative to the music.",
+  "调整节拍相对于标准化歌曲的音量，范围 -40～+10 dB；默认 -10 dB，最高值比默认突出 20 dB。":
+    "Adjust the beat relative to the normalized music from -40 to +10 dB; -10 dB is the default, and the maximum is 20 dB more prominent than the default.",
   "按固定步数播放更明显的重拍；选择“无重拍”可保持每一步相同。":
     "Play a stronger accent at a fixed step interval; choose No accent to keep every step identical.",
   "在左右声道之间交替播放脚步提示，帮助区分左右脚。":
@@ -735,9 +738,10 @@ function translateRuntimeMessage(message: string, language: AppLanguage): string
     [/^编码 MP3 (\d+) \/ (\d+)$/, "Encoding MP3 $1 / $2"],
     [/^写入 WAV (\d+) \/ (\d+)$/, "Writing WAV $1 / $2"],
     [/^打包 (\d+) 首 ([A-Z0-9]+)$/, "Packaging $1 $2 tracks"],
-    [/^响度预扫描 (\d+) \/ (\d+) · (.+)$/, "Loudness pre-scan $1 / $2 · $3"],
-    [/^低内存渲染 (\d+) \/ (\d+) · (.+)$/, "Low-memory render $1 / $2 · $3"],
-    [/^响度测量完成(.*)$/, "Loudness measurement complete$1"],
+    [/^纯歌曲响度预扫描 (\d+) \/ (\d+) · (.+)$/, "Music-only loudness pre-scan $1 / $2 · $3"],
+    [/^标准化歌曲与节拍峰值预扫描 (\d+) \/ (\d+) · (.+)$/, "Normalized music and beat peak pre-scan $1 / $2 · $3"],
+    [/^低内存最终渲染 (\d+) \/ (\d+) · (.+)$/, "Low-memory final render $1 / $2 · $3"],
+    [/^纯歌曲响度测量完成(.*)$/, "Music-only loudness measurement complete$1"],
     [/^编码 MP3（(\d+) kbps）$/, "Encoding MP3 ($1 kbps)"],
     [/^生成 MP4 封面视频（AAC (\d+) kbps）$/, "Creating MP4 cover video (AAC $1 kbps)"],
     [/^MP4 编码失败（FFmpeg 退出码 (\d+)）：(.+)$/, "MP4 encoding failed (FFmpeg exit code $1): $2"],

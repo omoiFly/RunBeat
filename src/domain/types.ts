@@ -27,6 +27,9 @@ export type ProjectNameMode = "auto" | "custom";
 export const DEFAULT_PROJECT_NAME = "未命名项目";
 export const MIN_TARGET_SPM = 60;
 export const MAX_TARGET_SPM = 230;
+export const MIN_BEAT_TRACK_GAIN_DB = -40;
+export const MAX_BEAT_TRACK_GAIN_DB = 10;
+export const DEFAULT_BEAT_TRACK_GAIN_DB = -10;
 
 export function clampTargetSpm(targetSpm: number): number {
   return Math.max(MIN_TARGET_SPM, Math.min(MAX_TARGET_SPM, Math.round(targetSpm)));
@@ -187,7 +190,7 @@ export function createProject(name?: string): ProjectV1 {
     tracks: [],
     beatTrack: {
       sound: "wood",
-      gainDb: 0,
+      gainDb: DEFAULT_BEAT_TRACK_GAIN_DB,
       accentEvery: 0,
       alternateFeet: true,
       duckingEnabled: false

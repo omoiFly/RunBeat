@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BeatTrackSettings } from "../domain/types";
-import { generateBeatHit, generateBeatTrack, generateBeatTrackRange } from "./beatTrack";
+import { beatTrackGainForReference, generateBeatHit, generateBeatTrack, generateBeatTrackRange } from "./beatTrack";
 
 const customSettings: BeatTrackSettings = {
   sound: "custom",
@@ -25,6 +25,23 @@ describe("custom beat track", () => {
 
   it("reports when a custom sample needs to be uploaded again", () => {
     expect(() => generateBeatTrack(1, 180, 1_000, customSettings)).toThrow("重新上传");
+  });
+});
+
+describe("beat track gain staging", () => {
+  it("maps the new -10 dB default to the old raw 0 dB strength", () => {
+    const sample = {
+      channels: [Float32Array.from([1])],
+      sampleRate: 1_000
+    };
+    const baselineGain = beatTrackGainForReference({ ...customSettings, gainDb: -10 }, 1_000, -14, sample);
+    const zeroGain = beatTrackGainForReference(customSettings, 1_000, -14, sample);
+    const maximumGain = beatTrackGainForReference({ ...customSettings, gainDb: 10 }, 1_000, -14, sample);
+    const quieterReferenceGain = beatTrackGainForReference({ ...customSettings, gainDb: -10 }, 1_000, -24, sample);
+    expect(baselineGain).toBeCloseTo(1, 6);
+    expect(20 * Math.log10(zeroGain / baselineGain)).toBeCloseTo(10, 5);
+    expect(20 * Math.log10(maximumGain / baselineGain)).toBeCloseTo(20, 5);
+    expect(20 * Math.log10(quieterReferenceGain / baselineGain)).toBeCloseTo(-10, 5);
   });
 });
 
