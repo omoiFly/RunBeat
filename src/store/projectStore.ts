@@ -1,16 +1,19 @@
 import { create } from "zustand";
 import { deriveTrackAnalysis, estimateGlobalBpmConfidence } from "../audio/bpm";
 import { tempoChangeRange } from "../domain/tempoChange";
-import { clampTargetSpm, createProject, DEFAULT_PROJECT_NAME, type BeatTrackSettings, type ExportSettings, type MappingMode, type ProjectV1, type Track, type TrackEdit } from "../domain/types";
+import { clampTargetSpm, createProject, DEFAULT_PROJECT_NAME, type BeatTrackSettings, type CustomBeatSampleRef, type ExportSettings, type MappingMode, type ProjectV1, type Track, type TrackEdit } from "../domain/types";
 import { createAnalysisWorkerPool, type AnalysisWorkerPool } from "../services/analysis";
 import { decodeFile } from "../services/audio";
 import { recommendedAnalysisConcurrency } from "../services/clientPerformance";
 import {
+  clearCustomBeatSample,
   clearCustomBeatSamples,
   cloneCustomBeatSample,
   commitCustomBeatSample,
   discardCustomBeatSample,
-  registerCustomBeatSample
+  getCustomBeatSample,
+  registerCustomBeatSample,
+  restoreCustomBeatSample
 } from "../services/customBeat";
 import { loadProject, saveProject } from "../services/db";
 import { defaultExportEnabled, resolveExportEnabled } from "../services/exportSelection";
@@ -73,7 +76,7 @@ export interface ProjectState {
   setTracksExportEnabled: (trackIds: string[], enabled: boolean) => void;
   resetExportSelection: () => void;
   reorderTracks: (orderedIds: string[]) => void;
-  applyProjectProperties: (patch: ProjectPropertiesPatch, customBeatFile?: File) => Promise<void>;
+  applyProjectProperties: (patch: ProjectPropertiesPatch, customBeatFile?: File) => Promise<CustomBeatSampleRef | undefined>;
   updateBeatTrack: (patch: Partial<BeatTrackSettings>) => void;
   setCustomBeatFile: (file: File) => Promise<void>;
   updateExportSettings: (patch: Partial<ExportSettings>) => void;
@@ -636,12 +639,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const stored = await loadProject(projectId);
     if (request !== initializeRequest) return;
     if (stored) {
+      const customSampleAvailable = stored.beatTrack.customSample
+        ? await restoreCustomBeatSample(stored.id, stored.beatTrack.customSample)
+        : false;
+      if (request !== initializeRequest) {
+        clearCustomBeatSample(stored.id);
+        return;
+      }
       const project = withDerived({
           ...stored,
           beatTrack: {
             ...stored.beatTrack,
             customSample: stored.beatTrack.customSample
-              ? { ...stored.beatTrack.customSample, available: false }
+              ? { ...stored.beatTrack.customSample, available: customSampleAvailable }
               : undefined
           },
           tracks: stored.tracks.map((track) => ({ ...track, source: { ...track.source, available: false }, status: "missing" }))
@@ -1021,13 +1031,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   applyProjectProperties: async (requestedPatch, customBeatFile) => {
-    if (!Object.keys(requestedPatch).length && !customBeatFile) return;
+    if (!Object.keys(requestedPatch).length && !customBeatFile) return undefined;
     const projectId = get().project.id;
     let patch = requestedPatch;
     let customBeatNotice: string | undefined;
+    let appliedCustomSample: CustomBeatSampleRef | undefined;
     if (customBeatFile) {
       const customSample = await registerCustomBeatSample(projectId, customBeatFile);
-      if (get().project.id !== projectId) return;
+      if (get().project.id !== projectId) return undefined;
+      if (!getCustomBeatSample(projectId)) throw new Error("自定义鼓点注册失败，请重试");
+      appliedCustomSample = customSample;
       patch = {
         ...patch,
         beatTrack: {
@@ -1060,6 +1073,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         ...(customBeatNotice ? { notice: customBeatNotice } : {})
       };
     });
+    return appliedCustomSample;
   },
 
   updateBeatTrack: (patch) => {
@@ -1069,7 +1083,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => historicProject(state, project, "项目属性", "project-settings"));
   },
 
-  setCustomBeatFile: async (file) => get().applyProjectProperties({}, file),
+  setCustomBeatFile: async (file) => {
+    await get().applyProjectProperties({}, file);
+  },
 
   updateExportSettings: (patch) => {
     const current = get().project;

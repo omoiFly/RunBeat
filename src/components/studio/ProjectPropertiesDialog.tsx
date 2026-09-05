@@ -7,10 +7,13 @@ import {
   MIN_BEAT_TRACK_GAIN_DB,
   MIN_TARGET_SPM,
   type BeatTrackSettings,
+  type CustomBeatSampleRef,
   type MappingMode,
   type ProjectV1
 } from "../../domain/types";
+import type { BeatSample } from "../../audio/beatTrack";
 import { useI18n } from "../../i18n";
+import { decodeCustomBeatFile, getCustomBeatSample } from "../../services/customBeat";
 import { BEAT_PREVIEW_SECONDS, playBeatPreview, stopPreview } from "../../services/preview";
 import { ClassicIcon } from "../ClassicIcon";
 
@@ -57,7 +60,7 @@ function reportError(error: unknown): void {
 export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
   open: boolean;
   project: ProjectV1;
-  onApply: (draft: ProjectPropertiesDraft, customBeatFile?: File) => Promise<void> | void;
+  onApply: (draft: ProjectPropertiesDraft, customBeatFile?: File) => Promise<CustomBeatSampleRef | undefined> | void;
   onClose: () => void;
 }) {
   const { t } = useI18n();
@@ -65,9 +68,14 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
   const [draft, setDraft] = useState<ProjectPropertiesDraft>(() => draftFromProject(project));
   const [targetSpmInput, setTargetSpmInput] = useState(() => String(project.targetSpm));
   const [customBeatFile, setCustomBeatFile] = useState<File>();
+  const [customBeatSample, setCustomBeatSample] = useState<BeatSample | undefined>(() => (
+    project.beatTrack.sound === "custom" ? getCustomBeatSample(project.id) : undefined
+  ));
+  const [customBeatLoading, setCustomBeatLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const previewRequest = useRef(0);
+  const customBeatRequest = useRef(0);
   const customFileRef = useRef<HTMLInputElement>(null);
   const parsedTargetSpm = Number(targetSpmInput);
   const normalizedTargetSpm = targetSpmInput.trim() && Number.isFinite(parsedTargetSpm)
@@ -82,10 +90,11 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
     beatTrack: draft.beatTrack
   }), [draft, normalizedTargetSpm, project]);
   const customBeatUnavailable = draft.beatTrack.sound === "custom"
-    && (!draft.beatTrack.customSample?.available || customBeatFile != null);
+    && (customBeatLoading || !customBeatSample);
 
   useEffect(() => () => {
     previewRequest.current += 1;
+    customBeatRequest.current += 1;
     stopPreview();
   }, [project.id]);
 
@@ -109,12 +118,19 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
       window.requestAnimationFrame(() => document.getElementById("project-property-name")?.focus());
       return false;
     }
+    if (customBeatFile && customBeatLoading) return false;
     setApplying(true);
     try {
       const nextDraft = { ...draft, name: draft.name.trim(), targetSpm: normalizedTargetSpm };
       setDraft(nextDraft);
       setTargetSpmInput(String(normalizedTargetSpm));
-      await onApply(nextDraft, customBeatFile);
+      const appliedCustomSample = await onApply(nextDraft, nextDraft.beatTrack.sound === "custom" ? customBeatFile : undefined);
+      if (appliedCustomSample) {
+        setDraft((current) => ({
+          ...current,
+          beatTrack: { ...current.beatTrack, customSample: appliedCustomSample }
+        }));
+      }
       setCustomBeatFile(undefined);
       return true;
     } catch (error) {
@@ -135,7 +151,7 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
     const id = ++previewRequest.current;
     setPreviewing(true);
     try {
-      await playBeatPreview(draftProject);
+      await playBeatPreview(draftProject, customBeatSample);
     } catch (error) {
       if (previewRequest.current === id) setPreviewing(false);
       reportError(error);
@@ -296,8 +312,20 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
                         onChange={(event) => {
                           const file = event.target.files?.[0];
                           if (!file) return;
+                          const request = ++customBeatRequest.current;
                           setCustomBeatFile(file);
+                          setCustomBeatSample(undefined);
+                          setCustomBeatLoading(true);
                           updateBeat({ sound: "custom" });
+                          void decodeCustomBeatFile(file).then((sample) => {
+                            if (customBeatRequest.current !== request) return;
+                            setCustomBeatSample(sample);
+                          }).catch((error) => {
+                            if (customBeatRequest.current !== request) return;
+                            reportError(error);
+                          }).finally(() => {
+                            if (customBeatRequest.current === request) setCustomBeatLoading(false);
+                          });
                           event.currentTarget.value = "";
                         }}
                       />
@@ -352,9 +380,9 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
           </div>
 
           <div className="dialog-command-row">
-            <button className="default" type="button" disabled={applying} onClick={() => void apply().then((applied) => { if (applied) onClose(); })}>{t("确定")}</button>
+            <button className="default" type="button" disabled={applying || customBeatLoading} onClick={() => void apply().then((applied) => { if (applied) onClose(); })}>{t("确定")}</button>
             <button type="button" disabled={applying} onClick={onClose}>{t("取消")}</button>
-            <button type="button" disabled={applying} onClick={() => void apply()}>{t("应用")}</button>
+            <button type="button" disabled={applying || customBeatLoading} onClick={() => void apply()}>{t("应用")}</button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

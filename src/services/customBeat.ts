@@ -1,6 +1,7 @@
 import type { BeatSample } from "../audio/beatTrack";
 import type { CustomBeatSampleRef } from "../domain/types";
 import { decodeFile } from "./audio";
+import { loadCustomBeatResource, saveCustomBeatResource } from "./db";
 
 const MAX_CUSTOM_BEAT_BYTES = 10 * 1024 * 1024;
 const MAX_CUSTOM_BEAT_SECONDS = 3;
@@ -11,7 +12,7 @@ type CustomBeatSlot = {
 
 const customBeatSamples = new Map<string, CustomBeatSlot>();
 
-export async function registerCustomBeatSample(projectId: string, file: File): Promise<CustomBeatSampleRef> {
+export async function decodeCustomBeatFile(file: File): Promise<BeatSample & { durationSeconds: number }> {
   if (file.size > MAX_CUSTOM_BEAT_BYTES) throw new Error("自定义鼓点文件不能超过 10 MB");
   const decoded = await decodeFile(file, { createMono: false });
   if (!decoded.channels.length || decoded.duration <= 0) throw new Error("没有从文件中解码出可用的鼓点音频");
@@ -28,16 +29,34 @@ export async function registerCustomBeatSample(projectId: string, file: File): P
     for (let index = 0; index < channel.length; index += 1) normalized[index] = channel[index] * normalization;
     return normalized;
   });
+  return { channels, sampleRate: decoded.sampleRate, durationSeconds: decoded.duration };
+}
+
+export async function registerCustomBeatSample(projectId: string, file: File): Promise<CustomBeatSampleRef> {
+  const decoded = await decodeCustomBeatFile(file);
+  const resourceId = crypto.randomUUID();
+  const sample: BeatSample = { channels: decoded.channels, sampleRate: decoded.sampleRate };
+  await saveCustomBeatResource({ id: resourceId, ...sample });
   const slot = customBeatSamples.get(projectId) ?? {};
-  customBeatSamples.set(projectId, { ...slot, working: { channels, sampleRate: decoded.sampleRate } });
+  customBeatSamples.set(projectId, { ...slot, working: sample });
   return {
+    resourceId,
     fileName: file.name,
     fileSize: file.size,
     mimeType: file.type || "application/octet-stream",
     lastModified: file.lastModified,
-    durationSeconds: decoded.duration,
+    durationSeconds: decoded.durationSeconds,
     available: true
   };
+}
+
+export async function restoreCustomBeatSample(projectId: string, reference: CustomBeatSampleRef): Promise<boolean> {
+  if (!reference.resourceId) return false;
+  const resource = await loadCustomBeatResource(reference.resourceId);
+  if (!resource || !resource.channels.length || resource.sampleRate <= 0) return false;
+  const sample: BeatSample = { channels: resource.channels, sampleRate: resource.sampleRate };
+  customBeatSamples.set(projectId, { working: sample, saved: sample });
+  return true;
 }
 
 export function getCustomBeatSample(projectId: string): BeatSample | undefined {
@@ -53,7 +72,11 @@ export function commitCustomBeatSample(projectId: string): void {
 export function discardCustomBeatSample(projectId: string): void {
   const slot = customBeatSamples.get(projectId);
   if (!slot) return;
-  customBeatSamples.set(projectId, { ...slot, working: slot.saved });
+  if (slot.saved) {
+    customBeatSamples.set(projectId, { ...slot, working: slot.saved });
+  } else {
+    customBeatSamples.delete(projectId);
+  }
 }
 
 export function cloneCustomBeatSample(sourceProjectId: string, targetProjectId: string): void {
@@ -64,4 +87,8 @@ export function cloneCustomBeatSample(sourceProjectId: string, targetProjectId: 
 
 export function clearCustomBeatSamples(): void {
   customBeatSamples.clear();
+}
+
+export function clearCustomBeatSample(projectId: string): void {
+  customBeatSamples.delete(projectId);
 }

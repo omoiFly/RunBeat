@@ -790,15 +790,17 @@ export function playPreview(
   });
 }
 
-export async function playBeatPreview(project: ProjectV1): Promise<void> {
+export async function playBeatPreview(project: ProjectV1, customBeatSample?: BeatSample): Promise<void> {
   stopPreview();
   const generation = previewGeneration;
-  const customBeatSample = project.beatTrack.sound === "custom" ? getCustomBeatSample(project.id) : undefined;
-  if (project.beatTrack.sound === "custom" && !customBeatSample) {
+  const resolvedCustomBeatSample = project.beatTrack.sound === "custom"
+    ? customBeatSample ?? getCustomBeatSample(project.id)
+    : undefined;
+  if (project.beatTrack.sound === "custom" && !resolvedCustomBeatSample) {
     throw new Error("自定义鼓点文件不可用，请重新上传后试听");
   }
   const sampleRate = project.exportSettings.sampleRate;
-  const channels = generateBeatPreviewChannels(project, customBeatSample);
+  const channels = generateBeatPreviewChannels(project, resolvedCustomBeatSample);
   if (generation !== previewGeneration) return;
   const blob = encodeWav16({ channels, sampleRate });
   beatPreviewUrl = URL.createObjectURL(blob);

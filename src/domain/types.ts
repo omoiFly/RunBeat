@@ -116,6 +116,7 @@ export interface Track {
 }
 
 export interface CustomBeatSampleRef {
+  resourceId?: string;
   fileName: string;
   fileSize: number;
   mimeType: string;

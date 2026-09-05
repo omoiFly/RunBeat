@@ -450,7 +450,7 @@ export function StudioPage() {
   };
 
   const applyProjectProperties = async (draft: ProjectPropertiesDraft, customBeatFile?: File) => {
-    await commitProjectProperties({
+    return commitProjectProperties({
       ...(draft.name !== project.name ? { name: draft.name } : {}),
       ...(draft.targetSpm !== project.targetSpm ? { targetSpm: draft.targetSpm } : {}),
       ...(draft.mappingMode !== project.mappingMode ? { mappingMode: draft.mappingMode } : {}),

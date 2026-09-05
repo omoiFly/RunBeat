@@ -1,6 +1,12 @@
 import Dexie, { type EntityTable } from "dexie";
 import type { ProjectV1 } from "../domain/types";
 
+export interface CustomBeatResourceRow {
+  id: string;
+  sampleRate: number;
+  channels: Float32Array[];
+}
+
 interface ProjectRow {
   id: string;
   updatedAt: number;
@@ -9,9 +15,11 @@ interface ProjectRow {
 
 class RunBeatDatabase extends Dexie {
   projects!: EntityTable<ProjectRow, "id">;
+  customBeatResources!: EntityTable<CustomBeatResourceRow, "id">;
   constructor() {
     super("runbeat");
     this.version(1).stores({ projects: "id, updatedAt" });
+    this.version(2).stores({ projects: "id, updatedAt", customBeatResources: "id" });
   }
 }
 
@@ -38,4 +46,12 @@ export async function listProjects(): Promise<ProjectV1[]> {
 export async function deleteProject(id: string): Promise<void> {
   await db.projects.delete(id);
   notifyProjectsChanged();
+}
+
+export async function saveCustomBeatResource(resource: CustomBeatResourceRow): Promise<void> {
+  await db.customBeatResources.put(resource);
+}
+
+export async function loadCustomBeatResource(id: string): Promise<CustomBeatResourceRow | undefined> {
+  return db.customBeatResources.get(id);
 }
