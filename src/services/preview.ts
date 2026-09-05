@@ -198,10 +198,10 @@ class ContinuousTrackPreview implements TrackPreviewSession {
       phaseNudgeBeats: track.edit.phaseNudgeBeats
     };
     this.customBeatSample = mode === "processed-beat" && project.beatTrack.sound === "custom"
-      ? getCustomBeatSample(project.id)
+      ? getCustomBeatSample(project.beatTrack.customSample)
       : undefined;
     if (mode === "processed-beat" && project.beatTrack.sound === "custom" && !this.customBeatSample) {
-      throw new Error("自定义鼓点文件不可用，请重新上传后试听");
+      throw new Error("请从鼓点库选择一个可用的鼓点。");
     }
 
     this.snapshot = {
@@ -794,10 +794,10 @@ export async function playBeatPreview(project: ProjectV1, customBeatSample?: Bea
   stopPreview();
   const generation = previewGeneration;
   const resolvedCustomBeatSample = project.beatTrack.sound === "custom"
-    ? customBeatSample ?? getCustomBeatSample(project.id)
+    ? customBeatSample ?? getCustomBeatSample(project.beatTrack.customSample)
     : undefined;
   if (project.beatTrack.sound === "custom" && !resolvedCustomBeatSample) {
-    throw new Error("自定义鼓点文件不可用，请重新上传后试听");
+    throw new Error("请从鼓点库选择一个可用的鼓点。");
   }
   const sampleRate = project.exportSettings.sampleRate;
   const channels = generateBeatPreviewChannels(project, resolvedCustomBeatSample);

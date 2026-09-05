@@ -364,9 +364,9 @@ export async function renderProject(
   const { signal, language = "zh-CN" } = options;
   const jobId = crypto.randomUUID();
   const includeBeat = project.exportSettings.includeBeat !== false;
-  const customBeatSample = includeBeat && project.beatTrack.sound === "custom" ? getCustomBeatSample(project.id) : undefined;
+  const customBeatSample = includeBeat && project.beatTrack.sound === "custom" ? getCustomBeatSample(project.beatTrack.customSample) : undefined;
   if (includeBeat && project.beatTrack.sound === "custom" && !customBeatSample) {
-    throw new Error("自定义鼓点文件不可用，请在项目设置中重新上传");
+    throw new Error("请从鼓点库选择一个可用的鼓点。");
   }
   const selected = project.tracks.filter((track) => resolveExportEnabled(track, project.maxTempoChangePercent));
   if (!selected.length) throw new Error("没有勾选可导出的歌曲");

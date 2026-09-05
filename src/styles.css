@@ -4087,3 +4087,37 @@ legend {
     grid-template-columns: 140px minmax(0, 1fr);
   }
 }
+
+/* Shared beat library and application options use the existing classic dialogs. */
+.beat-library-dialog { width: min(780px, calc(100vw - 24px)); height: min(580px, calc(100vh - 24px)); }
+.beat-library-body { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 12px; overflow: auto; }
+.beat-library-body > p { margin: 0; }
+.beat-library-toolbar { display: flex; flex-wrap: wrap; gap: 6px; }
+.beat-library-toolbar button { min-width: 74px; }
+.beat-library-search { display: flex; align-items: center; gap: 10px; }
+.beat-library-search input { flex: 1; min-width: 0; }
+.beat-library-list { flex: 1; min-height: 130px; overflow: auto; background: white; }
+.beat-library-list table { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.beat-library-list th { position: sticky; top: 0; background: var(--silver); text-align: left; box-shadow: inset -1px -1px var(--gray), inset 1px 1px var(--white); }
+.beat-library-list th, .beat-library-list td { height: 26px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.beat-library-list th:first-child { width: 43%; }
+.beat-library-list tr[aria-selected="true"] { background: var(--navy, #000080); color: white; }
+.beat-library-list tbody tr:focus { outline: 1px dotted white; outline-offset: -2px; }
+.beat-library-empty { padding: 20px 12px; text-align: center; }
+.beat-library-details { display: flex; flex-direction: column; gap: 4px; min-height: 34px; overflow-wrap: anywhere; }
+.beat-library-error { color: #800000; white-space: pre-wrap; overflow-wrap: anywhere; }
+.beat-library-footer { align-items: center; justify-content: space-between; }
+.options-dialog { width: min(420px, calc(100vw - 24px)); height: auto; max-height: calc(100vh - 24px); }
+.options-dialog-body { padding: 14px; overflow: auto; }
+.options-dialog-body > p { margin: 0 0 14px; }
+.options-dialog-body fieldset { display: flex; align-items: center; gap: 12px; }
+.options-dialog-body select { flex: 1; min-width: 0; }
+.rename-beat-dialog { width: min(420px, calc(100vw - 24px)); height: auto; max-height: calc(100vh - 24px); }
+.rename-beat-dialog form { min-height: 0; overflow: auto; }
+.rename-beat-body { padding: 14px; display: flex; flex-direction: column; gap: 8px; overflow-wrap: anywhere; }
+.rename-beat-body > p { margin: 0; }
+@media (max-width: 560px) {
+  .beat-library-list { overflow-x: auto; }
+  .beat-library-list table { min-width: 500px; }
+  .beat-library-body { padding: 8px; }
+}

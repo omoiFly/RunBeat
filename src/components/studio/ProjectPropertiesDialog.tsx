@@ -7,13 +7,15 @@ import {
   MIN_BEAT_TRACK_GAIN_DB,
   MIN_TARGET_SPM,
   type BeatTrackSettings,
-  type CustomBeatSampleRef,
   type MappingMode,
   type ProjectV1
 } from "../../domain/types";
 import type { BeatSample } from "../../audio/beatTrack";
 import { useI18n } from "../../i18n";
-import { decodeCustomBeatFile, getCustomBeatSample } from "../../services/customBeat";
+import { loadCustomBeatSample } from "../../services/customBeat";
+import { beatSampleReference } from "../../services/beatLibrary";
+import { releaseBeatResources, retainBeatResources } from "../../services/beatResourceLocks";
+import { useBeatLibrary } from "../../services/useBeatLibrary";
 import { BEAT_PREVIEW_SECONDS, playBeatPreview, stopPreview } from "../../services/preview";
 import { ClassicIcon } from "../ClassicIcon";
 
@@ -60,23 +62,22 @@ function reportError(error: unknown): void {
 export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
   open: boolean;
   project: ProjectV1;
-  onApply: (draft: ProjectPropertiesDraft, customBeatFile?: File) => Promise<CustomBeatSampleRef | undefined> | void;
+  onApply: (draft: ProjectPropertiesDraft) => Promise<void> | void;
   onClose: () => void;
 }) {
-  const { t } = useI18n();
+  const { t, translateMessage } = useI18n();
+  const library = useBeatLibrary();
   const [tab, setTab] = useState<PropertiesTab>("general");
   const [draft, setDraft] = useState<ProjectPropertiesDraft>(() => draftFromProject(project));
   const [targetSpmInput, setTargetSpmInput] = useState(() => String(project.targetSpm));
-  const [customBeatFile, setCustomBeatFile] = useState<File>();
-  const [customBeatSample, setCustomBeatSample] = useState<BeatSample | undefined>(() => (
-    project.beatTrack.sound === "custom" ? getCustomBeatSample(project.id) : undefined
-  ));
-  const [customBeatLoading, setCustomBeatLoading] = useState(false);
+  const [sampleState, setSampleState] = useState<{ resourceId: string; sample?: BeatSample; error?: string }>();
   const [applying, setApplying] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const previewRequest = useRef(0);
-  const customBeatRequest = useRef(0);
-  const customFileRef = useRef<HTMLInputElement>(null);
+  const sampleOwner = useRef({});
+  const customResourceId = draft.beatTrack.sound === "custom" ? draft.beatTrack.customSample?.resourceId : undefined;
+  const customBeatName = library.items.find((item) => item.resourceId === customResourceId)?.name ?? draft.beatTrack.customSample?.fileName;
+  const customBeatSample = customResourceId && sampleState?.resourceId === customResourceId ? sampleState.sample : undefined;
   const parsedTargetSpm = Number(targetSpmInput);
   const normalizedTargetSpm = targetSpmInput.trim() && Number.isFinite(parsedTargetSpm)
     ? clampTargetSpm(parsedTargetSpm)
@@ -90,11 +91,25 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
     beatTrack: draft.beatTrack
   }), [draft, normalizedTargetSpm, project]);
   const customBeatUnavailable = draft.beatTrack.sound === "custom"
-    && (customBeatLoading || !customBeatSample);
+    && !customBeatSample;
+
+  useEffect(() => {
+    const owner = sampleOwner.current;
+    let active = true;
+    if (customResourceId) {
+      void retainBeatResources(owner, [customResourceId]).then(async () => {
+        if (!active) return;
+        const sample = await loadCustomBeatSample(customResourceId);
+        if (active) setSampleState({ resourceId: customResourceId, sample, error: sample ? undefined : "鼓点已被删除，请重新选择。" });
+      }).catch((error) => {
+        if (active) setSampleState({ resourceId: customResourceId, error: error instanceof Error ? error.message : String(error) });
+      });
+    }
+    return () => { active = false; releaseBeatResources(owner); };
+  }, [customResourceId]);
 
   useEffect(() => () => {
     previewRequest.current += 1;
-    customBeatRequest.current += 1;
     stopPreview();
   }, [project.id]);
 
@@ -102,6 +117,7 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
     previewRequest.current += 1;
     stopPreview();
     setPreviewing(false);
+    if ("sound" in patch && (patch.sound !== draft.beatTrack.sound || patch.customSample?.resourceId !== draft.beatTrack.customSample?.resourceId)) setSampleState(undefined);
     setDraft((current) => ({ ...current, beatTrack: { ...current.beatTrack, ...patch } }));
   };
 
@@ -118,20 +134,13 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
       window.requestAnimationFrame(() => document.getElementById("project-property-name")?.focus());
       return false;
     }
-    if (customBeatFile && customBeatLoading) return false;
+    if (customBeatUnavailable) return false;
     setApplying(true);
     try {
       const nextDraft = { ...draft, name: draft.name.trim(), targetSpm: normalizedTargetSpm };
       setDraft(nextDraft);
       setTargetSpmInput(String(normalizedTargetSpm));
-      const appliedCustomSample = await onApply(nextDraft, nextDraft.beatTrack.sound === "custom" ? customBeatFile : undefined);
-      if (appliedCustomSample) {
-        setDraft((current) => ({
-          ...current,
-          beatTrack: { ...current.beatTrack, customSample: appliedCustomSample }
-        }));
-      }
-      setCustomBeatFile(undefined);
+      await onApply(nextDraft);
       return true;
     } catch (error) {
       reportError(error);
@@ -205,7 +214,7 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
 
             <div className="property-sheet-page">
               {tab === "general" && <>
-                <fieldset>
+                <fieldset disabled={applying}>
                   <legend>{t("项目")}</legend>
                   <div className="classic-form-grid project-general-grid">
                     <label htmlFor="project-property-name">{t("名称:")}</label>
@@ -220,7 +229,7 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
                   </div>
                 </fieldset>
 
-                <fieldset>
+                <fieldset disabled={applying}>
                   <legend>{t("将歌曲匹配到目标步频")}</legend>
                   <div className="classic-form-grid">
                     <label htmlFor="project-property-spm">{t("目标步频:")}</label>
@@ -255,7 +264,7 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
                   </div>
                 </fieldset>
 
-                <fieldset>
+                <fieldset disabled={applying}>
                   <legend>{t("设置新歌曲的自动匹配规则")}</legend>
                   <div className="classic-radio-list" data-help="selection-range">
                     {([
@@ -280,55 +289,35 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
               </>}
 
               {tab === "beat" && <>
-                <fieldset>
+                <fieldset disabled={applying}>
                   <legend>{t("选择并试听全局节拍轨")}</legend>
                   <div className="classic-form-grid">
                     <label htmlFor="project-property-beat">{t("声音:")}</label>
                     <select
                       id="project-property-beat"
                       data-help="beat-sound"
-                      value={draft.beatTrack.sound}
-                      onChange={(event) => updateBeat({ sound: event.target.value as BeatTrackSettings["sound"] })}
+                      disabled={applying}
+                      value={draft.beatTrack.sound === "custom" ? `custom:${draft.beatTrack.customSample?.resourceId ?? "missing"}` : draft.beatTrack.sound}
+                      onChange={(event) => {
+                        const value = event.target.value;
+                        if (value.startsWith("custom:")) {
+                          const item = library.items.find((entry) => entry.resourceId === value.slice(7));
+                          if (item) updateBeat({ sound: "custom", customSample: beatSampleReference(item) });
+                        } else updateBeat({ sound: value as BeatTrackSettings["sound"], customSample: undefined });
+                      }}
                     >
-                      {Object.entries(BEAT_LABELS).map(([value, label]) => <option
-                        key={value}
-                        value={value}
-                        disabled={value === "custom" && !draft.beatTrack.customSample && !customBeatFile}
-                      >{t(label)}</option>)}
+                      <optgroup label={t("内置鼓点")}>
+                        {Object.entries(BEAT_LABELS).filter(([value]) => value !== "custom").map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+                      </optgroup>
+                      <optgroup label={t("鼓点库")}>
+                        {library.items.map((item) => <option key={item.resourceId} value={`custom:${item.resourceId}`}>{item.name}</option>)}
+                      </optgroup>
+                      {draft.beatTrack.sound === "custom" && !library.items.some((item) => item.resourceId === customResourceId) && <option value={`custom:${customResourceId ?? "missing"}`} disabled>{draft.beatTrack.customSample?.fileName ?? t("自定义鼓点")} ({library.loading ? t("正在加载...") : t("不可用")})</option>}
                     </select>
                     <span />
                     <div className="custom-beat-field">
-                      <button type="button" onClick={() => customFileRef.current?.click()}>
-                        {draft.beatTrack.customSample || customBeatFile ? t("更换...") : t("自定义...")}
-                      </button>
-                      <span title={customBeatFile?.name ?? draft.beatTrack.customSample?.fileName}>
-                        {customBeatFile?.name ?? draft.beatTrack.customSample?.fileName ?? ""}
-                      </span>
-                      <input
-                        hidden
-                        ref={customFileRef}
-                        type="file"
-                        accept="audio/*,.wav,.mp3,.flac,.m4a,.aac,.ogg"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0];
-                          if (!file) return;
-                          const request = ++customBeatRequest.current;
-                          setCustomBeatFile(file);
-                          setCustomBeatSample(undefined);
-                          setCustomBeatLoading(true);
-                          updateBeat({ sound: "custom" });
-                          void decodeCustomBeatFile(file).then((sample) => {
-                            if (customBeatRequest.current !== request) return;
-                            setCustomBeatSample(sample);
-                          }).catch((error) => {
-                            if (customBeatRequest.current !== request) return;
-                            reportError(error);
-                          }).finally(() => {
-                            if (customBeatRequest.current === request) setCustomBeatLoading(false);
-                          });
-                          event.currentTarget.value = "";
-                        }}
-                      />
+                      <button type="button" disabled={applying} onClick={() => { stopPreview(); setPreviewing(false); window.dispatchEvent(new Event("runbeat:open-beat-library")); }}>{t("打开鼓点库")}</button>
+                      {!library.items.length && !library.loading && <span>{t("可在鼓点库上传自己的鼓点。")}</span>}
                     </div>
                     <label htmlFor="project-property-gain">{t("相对音量:")}</label>
                     <div className="range-with-value">
@@ -368,21 +357,22 @@ export function ProjectPropertiesDialog({ open, project, onApply, onClose }: {
                     <label htmlFor="project-property-alternate">{t("左右脚声道交替")}</label>
                   </div>
                   <div className="beat-preview-command">
-                    <button type="button" disabled={customBeatUnavailable} onClick={() => void togglePreview()}>
+                    <button type="button" disabled={applying || customBeatUnavailable} onClick={() => void togglePreview()}>
                       <ClassicIcon name={previewing ? "stop" : "play"} />
                       {previewing ? t("停止") : t("试听")}
                     </button>
-                    <span>{t(BEAT_LABELS[draft.beatTrack.sound])} · {normalizedTargetSpm} SPM</span>
+                    <span>{draft.beatTrack.sound === "custom" ? customBeatName : t(BEAT_LABELS[draft.beatTrack.sound])} · {normalizedTargetSpm} SPM</span>
                   </div>
+                  {(library.error || (sampleState?.resourceId === customResourceId && sampleState?.error)) && <p role="alert">{translateMessage(library.error ?? sampleState?.error)}</p>}
                 </fieldset>
               </>}
             </div>
           </div>
 
           <div className="dialog-command-row">
-            <button className="default" type="button" disabled={applying || customBeatLoading} onClick={() => void apply().then((applied) => { if (applied) onClose(); })}>{t("确定")}</button>
+            <button className="default" type="button" disabled={applying || customBeatUnavailable} onClick={() => void apply().then((applied) => { if (applied) onClose(); })}>{t("确定")}</button>
             <button type="button" disabled={applying} onClick={onClose}>{t("取消")}</button>
-            <button type="button" disabled={applying || customBeatLoading} onClick={() => void apply()}>{t("应用")}</button>
+            <button type="button" disabled={applying || customBeatUnavailable} onClick={() => void apply()}>{t("应用")}</button>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

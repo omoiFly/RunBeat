@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { DEFAULT_PROJECT_NAME, type ProjectV1 } from "../domain/types";
 import { useI18n } from "../i18n";
 import { listProjects, PROJECTS_CHANGED_EVENT } from "../services/db";
-import { useProjectStore } from "../store/projectStore";
+import { setWorkspaceBeatProtectionActive, useProjectStore } from "../store/projectStore";
 import { ClassicIcon, type ClassicIconName } from "./ClassicIcon";
 import { CONTEXT_HELP } from "./contextHelp";
 import { LazyDialogFallback } from "./LazyDialogFallback";
@@ -11,8 +11,10 @@ import { LazyDialogFallback } from "./LazyDialogFallback";
 const HelpTopicsDialog = lazy(() => import("./HelpSystem").then((module) => ({ default: module.HelpTopicsDialog })));
 const AboutDialog = lazy(() => import("./HelpSystem").then((module) => ({ default: module.AboutDialog })));
 const ContextHelpPopup = lazy(() => import("./HelpSystem").then((module) => ({ default: module.ContextHelpPopup })));
+const BeatLibraryDialog = lazy(() => import("./BeatLibraryDialog").then((module) => ({ default: module.BeatLibraryDialog })));
+const OptionsDialog = lazy(() => import("./OptionsDialog").then((module) => ({ default: module.OptionsDialog })));
 
-const MENU_ORDER = ["file", "edit", "view", "project", "help"] as const;
+const MENU_ORDER = ["file", "edit", "view", "project", "tools", "help"] as const;
 type MenuName = (typeof MENU_ORDER)[number];
 
 export type AppCommand =
@@ -81,7 +83,7 @@ function timeLabel(timestamp: number | undefined, language: "zh-CN" | "en"): str
 }
 
 export function AppLayout() {
-  const { language, setLanguage, t, translateMessage } = useI18n();
+  const { language, t, translateMessage } = useI18n();
   const location = useLocation();
   const navigate = useNavigate();
   const menuBarRef = useRef<HTMLDivElement>(null);
@@ -90,10 +92,17 @@ export function AppLayout() {
   const [menuStatus, setMenuStatus] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [beatLibraryOpen, setBeatLibraryOpen] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [helpMode, setHelpMode] = useState(false);
   const [helpPopup, setHelpPopup] = useState<{ text: string; x: number; y: number }>();
   const [uiPrefs, setUiPrefs] = useState(readUiPrefs);
   const [recentProjects, setRecentProjects] = useState<ProjectV1[]>([]);
+  useEffect(() => {
+    const openLibrary = () => setBeatLibraryOpen(true);
+    window.addEventListener("runbeat:open-beat-library", openLibrary);
+    return () => window.removeEventListener("runbeat:open-beat-library", openLibrary);
+  }, []);
   const project = useProjectStore((state) => state.project);
   const busy = useProjectStore((state) => state.busy);
   const analysisProgress = useProjectStore((state) => state.analysisProgress);
@@ -107,6 +116,10 @@ export function AppLayout() {
   const lastSavedAt = useProjectStore((state) => state.lastSavedAt);
   const inStudio = location.pathname === "/studio" || location.pathname === "/";
   const inProjects = location.pathname === "/projects";
+  useEffect(() => {
+    setWorkspaceBeatProtectionActive(inStudio);
+    return () => setWorkspaceBeatProtectionActive(false);
+  }, [inStudio]);
   const projectTitle = project.name === DEFAULT_PROJECT_NAME ? t("未命名项目") : project.name;
   const title = inStudio
     ? `${projectTitle}${isDirty ? " *" : ""} - RunBeat`
@@ -240,7 +253,7 @@ export function AppLayout() {
       }
       if (event.defaultPrevented) return;
       if (document.querySelector("[role='dialog']")) return;
-      const menuShortcut = ({ f: "file", e: "edit", v: "view", p: "project", h: "help" } as const)[key as "f" | "e" | "v" | "p" | "h"];
+      const menuShortcut = ({ f: "file", e: "edit", v: "view", p: "project", t: "tools", h: "help" } as const)[key as "f" | "e" | "v" | "p" | "t" | "h"];
       if (event.altKey && !event.ctrlKey && !event.metaKey && menuShortcut) {
         event.preventDefault();
         setOpenSubmenu(null);
@@ -467,21 +480,20 @@ export function AppLayout() {
       ]
     },
     {
+      name: "tools",
+      label: accessLabel("工具", "T"),
+      items: [
+        { label: accessLabel("鼓点库", "B", true), action: () => setBeatLibraryOpen(true), description: t("管理可跨项目使用的鼓点，上传、试听、下载和清理素材。") },
+        { separator: true, label: "" },
+        { label: accessLabel("选项", "O", true), action: () => setOptionsOpen(true), description: t("设置界面语言等应用选项。") }
+      ]
+    },
+    {
       name: "help",
       label: accessLabel("帮助", "H"),
       items: [
         { label: accessLabel("帮助主题", "H"), shortcut: "F1", action: () => setHelpOpen(true), description: t("打开 RunBeat 帮助主题。") },
         { label: accessLabel("这是什么？", "W"), shortcut: "Shift+F1", action: () => setHelpMode(true), description: t("单击一个控件查看它的说明。") },
-        { separator: true, label: "" },
-        {
-          id: "language",
-          label: accessLabel("语言", "L"),
-          description: t("选择界面语言。"),
-          children: [
-            { label: "中文", ariaLabel: "中文", checked: language === "zh-CN", radio: true, action: () => setLanguage("zh-CN"), description: t("将界面语言切换为中文。") },
-            { label: "English", ariaLabel: "English", checked: language === "en", radio: true, action: () => setLanguage("en"), description: t("将界面语言切换为英文。") }
-          ]
-        },
         { separator: true, label: "" },
         { label: accessLabel("关于 RunBeat", "A", true), action: () => setAboutOpen(true), description: t("显示程序版本和许可证信息。") }
       ]
@@ -635,6 +647,8 @@ export function AppLayout() {
         </div>}
       </section>
 
+      {beatLibraryOpen && <Suspense fallback={<LazyDialogFallback />}><BeatLibraryDialog onClose={() => setBeatLibraryOpen(false)} /></Suspense>}
+      {optionsOpen && <Suspense fallback={<LazyDialogFallback />}><OptionsDialog onClose={() => setOptionsOpen(false)} /></Suspense>}
       {(helpOpen || location.pathname === "/guide") && <Suspense fallback={<LazyDialogFallback />}>
         <HelpTopicsDialog open onClose={() => {
           setHelpOpen(false);

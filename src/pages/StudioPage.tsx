@@ -452,7 +452,7 @@ export function StudioPage() {
     }
   };
 
-  const applyProjectProperties = async (draft: ProjectPropertiesDraft, customBeatFile?: File) => {
+  const applyProjectProperties = async (draft: ProjectPropertiesDraft) => {
     return commitProjectProperties({
       ...(draft.name !== project.name ? { name: draft.name } : {}),
       ...(draft.targetSpm !== project.targetSpm ? { targetSpm: draft.targetSpm } : {}),
@@ -461,7 +461,7 @@ export function StudioPage() {
         ? { maxTempoChangePercent: draft.maxTempoChangePercent }
         : {}),
       ...(JSON.stringify(draft.beatTrack) !== JSON.stringify(project.beatTrack) ? { beatTrack: draft.beatTrack } : {})
-    }, customBeatFile);
+    });
   };
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -741,6 +741,7 @@ export function StudioPage() {
       /></Suspense>}
 
       {projectPropertiesOpen && <Suspense fallback={<LazyDialogFallback />}><ProjectPropertiesDialog
+        key={project.id}
         open={projectPropertiesOpen}
         project={project}
         onApply={applyProjectProperties}

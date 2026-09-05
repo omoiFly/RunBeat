@@ -89,7 +89,7 @@ test("classic document shell uses property sheets and context help", async ({ pa
   await waitForStudio(page);
 
   const menuBar = page.getByRole("menubar", { name: "应用程序菜单" });
-  await expect(menuBar.getByRole("menuitem")).toHaveCount(5);
+  await expect(menuBar.getByRole("menuitem")).toHaveCount(6);
   const fileMenuButton = menuBar.getByRole("menuitem", { name: /文件\(F\)/ });
   await fileMenuButton.hover();
   await page.mouse.down();
@@ -143,7 +143,7 @@ test("classic document shell uses property sheets and context help", async ({ pa
   await page.getByRole("dialog", { name: "RunBeat 帮助主题" }).getByRole("button", { name: "关闭", exact: true }).click();
 });
 
-test("startup loads the core bitmap font and Help switches the persisted interface language", async ({ page }) => {
+test("startup loads the core bitmap font and Options switches the persisted interface language", async ({ page }) => {
   await waitForStudio(page);
 
   await expect(page.locator("html")).toHaveAttribute("data-startup", "ready");
@@ -167,12 +167,10 @@ test("startup loads the core bitmap font and Help switches the persisted interfa
   }
 
   const chineseMenu = page.getByRole("menubar", { name: "应用程序菜单" });
-  await chineseMenu.getByRole("menuitem", { name: /帮助\(H\)/ }).click();
-  await page.getByRole("menu", { name: "help" }).getByRole("menuitem", { name: /语言\(L\)/ }).hover();
-  const languageMenu = page.getByRole("menu", { name: "language" });
-  await expect(languageMenu.getByRole("menuitemradio", { name: "中文", exact: true })).toBeVisible();
-  await expect(languageMenu.getByRole("menuitemradio", { name: "English", exact: true })).toBeVisible();
-  await languageMenu.getByRole("menuitemradio", { name: "English", exact: true }).click();
+  await chineseMenu.getByRole("menuitem", { name: /工具\(T\)/ }).click();
+  await page.getByRole("menu", { name: "tools" }).getByRole("menuitem", { name: /选项\(O\)/ }).click();
+  await page.getByRole("dialog", { name: "选项" }).getByRole("combobox", { name: "语言" }).selectOption("en");
+  await page.getByRole("dialog", { name: "选项" }).getByRole("button", { name: "确定" }).click();
 
   const englishMenu = page.getByRole("menubar", { name: "Application menu" });
   await expect(englishMenu.getByRole("menuitem", { name: /File\(F\)/ })).toBeVisible();
@@ -237,14 +235,14 @@ test("startup loads the core bitmap font and Help switches the persisted interfa
   await page.getByRole("grid", { name: "Track detail list" }).waitFor();
   await expect(page.getByRole("grid", { name: "Track detail list" }).getByRole("columnheader", { name: "Tempo Change" })).toHaveCount(0);
   const persistedMenu = page.getByRole("menubar", { name: "Application menu" });
-  await persistedMenu.getByRole("menuitem", { name: /Help\(H\)/ }).click();
-  const languageTrigger = page.getByRole("menu", { name: "help" }).getByRole("menuitem", { name: /Language\(L\)/ });
-  await languageTrigger.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("menu", { name: "language" }).getByRole("menuitemradio", { name: "中文", exact: true })).toBeFocused();
-  await page.keyboard.press("ArrowLeft");
-  await expect(page.getByRole("menu", { name: "language" })).toBeHidden();
-  await expect(languageTrigger).toBeFocused();
+  await persistedMenu.getByRole("menuitem", { name: /Tools\(T\)/ }).focus();
+  await page.keyboard.press("Alt+t");
+  await expect(page.getByRole("menu", { name: "tools" }).getByRole("menuitem", { name: /Beat Library/ })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menu", { name: "tools" }).getByRole("menuitem", { name: /Options/ })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Options" }).getByRole("combobox", { name: "Language" })).toHaveValue("en");
+  await page.getByRole("dialog", { name: "Options" }).getByRole("button", { name: "Cancel" }).click();
 });
 
 test("fractional display scaling uses system vector UI fonts", async ({ browser }) => {
@@ -372,6 +370,35 @@ test("detailed track list analyzes locally and exports a localized timeline with
   page.on("pageerror", (error) => browserErrors.push(error.message));
   page.on("request", (request) => requestedResources.push(request.url()));
   await waitForStudio(page);
+  // During analysis, manual save is available for an existing project; the
+  // autosave guard intentionally delays a new project's first save.
+  await page.keyboard.press("Control+s");
+  const initialSave = page.getByRole("dialog", { name: "保存项目" });
+  await initialSave.getByLabel("项目名称:").fill("Analysis session");
+  await initialSave.getByRole("button", { name: "保存", exact: true }).click();
+  await expect(initialSave).toBeHidden();
+  await expect(page).toHaveURL(/\/studio\?project=/);
+
+  // Keep both real worker jobs queued until the test releases them. The editing
+  // checks must run during analysis regardless of the host's processing speed.
+  await page.evaluate(() => {
+    const original = Worker.prototype.postMessage;
+    const queued: Array<() => void> = [];
+    Worker.prototype.postMessage = function (message: unknown, options?: Transferable[] | StructuredSerializeOptions) {
+      const send = () => {
+        if (Array.isArray(options)) original.call(this, message, options);
+        else original.call(this, message, options);
+      };
+      if ((message as { kind?: string })?.kind === "analyze") queued.push(send);
+      else send();
+    };
+    Object.assign(window, { releaseNextAnalysis: () => {
+      const send = queued.shift();
+      if (!send) return false;
+      send();
+      return true;
+    } });
+  });
 
   const [chooser] = await Promise.all([
     page.waitForEvent("filechooser"),
@@ -391,6 +418,7 @@ test("detailed track list analyzes locally and exports a localized timeline with
   ]);
   await additionalChooser.setFiles({ name: "click-180.wav", mimeType: "audio/wav", buffer: clickTrackWav(180, 30) });
   await expect(grid.getByText("click-180.wav")).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { releaseNextAnalysis: () => boolean }).releaseNextAnalysis())).toBe(true);
   const firstRowDuringAnalysis = grid.getByRole("row", { name: /click-176\.wav/ });
   await expect(firstRowDuringAnalysis).toContainText("分析完成", { timeout: 80_000 });
   await expect(page.getByRole("progressbar", { name: "分析进度" })).toBeVisible();
@@ -426,6 +454,7 @@ test("detailed track list analyzes locally and exports a localized timeline with
   const liveProjectProperties = page.getByRole("dialog", { name: "项目属性" });
   await expect(liveProjectProperties).toBeVisible();
   await liveProjectProperties.getByRole("button", { name: "取消" }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { releaseNextAnalysis: () => boolean }).releaseNextAnalysis())).toBe(true);
   await expect(grid.getByText("分析完成")).toHaveCount(2, { timeout: 80_000 });
   await page.getByRole("tab", { name: "分析" }).click();
   const qualityBreakdown = page.getByRole("group", { name: "质量评估" });
@@ -469,9 +498,10 @@ test("detailed track list analyzes locally and exports a localized timeline with
   await expect(page.getByLabel("首拍(秒):")).toHaveAttribute("placeholder", /^\d+\.\d{2}$/);
 
   const menuBar = page.getByRole("menubar", { name: "应用程序菜单" });
-  await menuBar.getByRole("menuitem", { name: /帮助\(H\)/ }).click();
-  await page.getByRole("menu", { name: "help" }).getByRole("menuitem", { name: /语言\(L\)/ }).hover();
-  await page.getByRole("menu", { name: "language" }).getByRole("menuitemradio", { name: "English", exact: true }).click();
+  await menuBar.getByRole("menuitem", { name: /工具\(T\)/ }).click();
+  await page.getByRole("menu", { name: "tools" }).getByRole("menuitem", { name: /选项\(O\)/ }).click();
+  await page.getByRole("dialog", { name: "选项" }).getByRole("combobox", { name: "语言" }).selectOption("en");
+  await page.getByRole("dialog", { name: "选项" }).getByRole("button", { name: "确定" }).click();
 
   const calibrationLabels = page.getByRole("group", { name: "Manual Calibration" }).locator(".classic-form-grid > label");
   await expect(calibrationLabels).toHaveCount(3);

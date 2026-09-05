@@ -103,10 +103,10 @@ describe("export selection", () => {
       .rejects.toThrow(`一次最多导出 ${MAX_EXPORT_TRACKS} 首歌曲，当前已勾选 ${MAX_EXPORT_TRACKS + 1} 首`);
   });
 
-  it("requires a session copy of a selected custom beat sample", async () => {
+  it("requires an available library sample for a selected custom beat", async () => {
     const project = createProject();
     project.beatTrack.sound = "custom";
-    await expect(renderProject(project, () => undefined)).rejects.toThrow("重新上传");
+    await expect(renderProject(project, () => undefined)).rejects.toThrow("请从鼓点库选择一个可用的鼓点");
   });
 
   it("does not require a custom beat sample when the export omits the beat track", async () => {

@@ -1,20 +1,12 @@
 import { create } from "zustand";
 import { deriveTrackAnalysis, estimateGlobalBpmConfidence } from "../audio/bpm";
 import { tempoChangeRange } from "../domain/tempoChange";
-import { clampTargetSpm, createProject, DEFAULT_PROJECT_NAME, type BeatTrackSettings, type CustomBeatSampleRef, type ExportSettings, type MappingMode, type ProjectV1, type Track, type TrackEdit } from "../domain/types";
+import { clampTargetSpm, createProject, DEFAULT_PROJECT_NAME, type BeatTrackSettings, type ExportSettings, type MappingMode, type ProjectV1, type Track, type TrackEdit } from "../domain/types";
 import { createAnalysisWorkerPool, type AnalysisWorkerPool } from "../services/analysis";
 import { decodeFile } from "../services/audio";
 import { recommendedAnalysisConcurrency } from "../services/clientPerformance";
-import {
-  clearCustomBeatSample,
-  clearCustomBeatSamples,
-  cloneCustomBeatSample,
-  commitCustomBeatSample,
-  discardCustomBeatSample,
-  getCustomBeatSample,
-  registerCustomBeatSample,
-  restoreCustomBeatSample
-} from "../services/customBeat";
+import { clearCustomBeatSamples, loadCustomBeatSample } from "../services/customBeat";
+import { releaseBeatResources, retainBeatResources } from "../services/beatResourceLocks";
 import { loadProject, saveProject } from "../services/db";
 import { defaultExportEnabled, resolveExportEnabled } from "../services/exportSelection";
 import { clearRegisteredFiles, getRegisteredFile, reconcileRegisteredFiles, registerFile, registerRelinkedFiles } from "../services/files";
@@ -76,9 +68,8 @@ export interface ProjectState {
   setTracksExportEnabled: (trackIds: string[], enabled: boolean) => void;
   resetExportSelection: () => void;
   reorderTracks: (orderedIds: string[]) => void;
-  applyProjectProperties: (patch: ProjectPropertiesPatch, customBeatFile?: File) => Promise<CustomBeatSampleRef | undefined>;
+  applyProjectProperties: (patch: ProjectPropertiesPatch) => Promise<void>;
   updateBeatTrack: (patch: Partial<BeatTrackSettings>) => void;
-  setCustomBeatFile: (file: File) => Promise<void>;
   updateExportSettings: (patch: Partial<ExportSettings>) => void;
   renameProject: (name: string) => void;
   clearNotice: () => void;
@@ -189,7 +180,11 @@ function cloneProject(project: ProjectV1): ProjectV1 {
 }
 
 function persist(project: ProjectV1): Promise<void> {
-  const operation = persistQueue.then(() => saveProject(project));
+  const owner = {};
+  const id = project.beatTrack.customSample?.resourceId;
+  const operation = Promise.all([persistQueue, retainBeatResources(owner, id ? [id] : [])])
+    .then(() => saveProject(project))
+    .finally(() => releaseBeatResources(owner));
   persistQueue = operation.catch((error) => {
     console.error("Failed to save project", error);
   });
@@ -639,14 +634,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const stored = await loadProject(projectId);
     if (request !== initializeRequest) return;
     if (stored) {
-      const customSampleAvailable = stored.beatTrack.customSample
-        ? await restoreCustomBeatSample(stored.id, stored.beatTrack.customSample)
-        : false;
-      if (request !== initializeRequest) {
-        clearCustomBeatSample(stored.id);
-        return;
-      }
-      const project = withDerived({
+      const owner = {};
+      const resourceId = stored.beatTrack.customSample?.resourceId;
+      try {
+        await retainBeatResources(owner, resourceId ? [resourceId] : []);
+        const customSampleAvailable = resourceId ? Boolean(await loadCustomBeatSample(resourceId)) : false;
+        if (request !== initializeRequest) return;
+        const project = withDerived({
           ...stored,
           beatTrack: {
             ...stored.beatTrack,
@@ -656,23 +650,25 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           },
           tracks: stored.tracks.map((track) => ({ ...track, source: { ...track.source, available: false }, status: "missing" }))
         });
-      set({
-        project,
-        savedSnapshot: cloneProject(project),
-        revision: 0,
-        savedRevision: 0,
-        undoStack: [],
-        redoStack: [],
-        hasSavedRecord: true,
-        isDirty: false,
-        saveState: "idle",
-        saveError: undefined,
-        lastSavedAt: stored.updatedAt,
-        analysisProgress: {},
-        analysisTask: undefined,
-        busy: false,
-        notice: undefined
-      });
+        set({
+          project,
+          savedSnapshot: cloneProject(project),
+          revision: 0,
+          savedRevision: 0,
+          undoStack: [],
+          redoStack: [],
+          hasSavedRecord: true,
+          isDirty: false,
+          saveState: "idle",
+          saveError: undefined,
+          lastSavedAt: stored.updatedAt,
+          analysisProgress: {},
+          analysisTask: undefined,
+          busy: false,
+          notice: undefined
+        });
+        await retainWorkspaceBeatResources();
+      } finally { releaseBeatResources(owner); }
       return;
     }
     set({
@@ -1030,50 +1026,36 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   },
 
-  applyProjectProperties: async (requestedPatch, customBeatFile) => {
-    if (!Object.keys(requestedPatch).length && !customBeatFile) return undefined;
+  applyProjectProperties: async (patch) => {
+    if (!Object.keys(patch).length) return;
     const projectId = get().project.id;
-    let patch = requestedPatch;
-    let customBeatNotice: string | undefined;
-    let appliedCustomSample: CustomBeatSampleRef | undefined;
-    if (customBeatFile) {
-      const customSample = await registerCustomBeatSample(projectId, customBeatFile);
-      if (get().project.id !== projectId) return undefined;
-      if (!getCustomBeatSample(projectId)) throw new Error("自定义鼓点注册失败，请重试");
-      appliedCustomSample = customSample;
-      patch = {
-        ...patch,
-        beatTrack: {
-          ...(patch.beatTrack ?? get().project.beatTrack),
-          sound: "custom",
-          customSample
-        }
-      };
-      customBeatNotice = `已启用自定义鼓点：${customBeatFile.name}`;
-    }
-
-    set((state) => {
-      if (state.project.id !== projectId) return state;
-      const changedAt = Date.now();
-      const project = projectWithProperties(state.project, patch, changedAt);
-      if (project === state.project) return customBeatNotice ? { notice: customBeatNotice } : state;
-      if (!state.busy) {
-        return {
-          ...historicProject(state, project, "项目属性", "project-settings"),
-          ...(customBeatNotice ? { notice: customBeatNotice } : {})
-        };
+    const generation = workspaceGeneration;
+    const owner = {};
+    try {
+      const reference = patch.beatTrack?.customSample;
+      if (patch.beatTrack?.sound === "custom") {
+        if (!reference?.resourceId) throw new Error("请从鼓点库选择一个可用的鼓点。");
+        await retainBeatResources(owner, [reference.resourceId]);
+        if (!await loadCustomBeatSample(reference.resourceId)) throw new Error("鼓点已被删除，请重新选择。");
       }
-      return {
-        ...activeAnalysisProjectEdit(
+      if (generation !== workspaceGeneration || get().project.id !== projectId) return;
+      set((state) => {
+        if (state.project.id !== projectId) return state;
+        const changedAt = Date.now();
+        const project = projectWithProperties(state.project, patch, changedAt);
+        if (project === state.project) return state;
+        if (!state.busy) {
+          return historicProject(state, project, "项目属性", "project-settings");
+        }
+        return activeAnalysisProjectEdit(
           state,
           project,
           (historyProject) => projectWithProperties(historyProject, patch, changedAt),
           changedAt
-        ),
-        ...(customBeatNotice ? { notice: customBeatNotice } : {})
-      };
-    });
-    return appliedCustomSample;
+        );
+      });
+      await retainWorkspaceBeatResources();
+    } finally { releaseBeatResources(owner); }
   },
 
   updateBeatTrack: (patch) => {
@@ -1081,10 +1063,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     if (Object.entries(patch).every(([key, value]) => current.beatTrack[key as keyof BeatTrackSettings] === value)) return;
     const project = { ...current, beatTrack: { ...current.beatTrack, ...patch }, updatedAt: Date.now() };
     set((state) => historicProject(state, project, "项目属性", "project-settings"));
-  },
-
-  setCustomBeatFile: async (file) => {
-    await get().applyProjectProperties({}, file);
   },
 
   updateExportSettings: (patch) => {
@@ -1147,6 +1125,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       busy: false,
       notice: "项目文件已导入；包含歌曲的项目会自动加入本地项目列表。"
     });
+    const resourceId = project.beatTrack.customSample?.resourceId;
+    const generation = workspaceGeneration;
+    if (resourceId) {
+      void retainWorkspaceBeatResources().then(() => loadCustomBeatSample(resourceId)).then((sample) => {
+        if (generation !== workspaceGeneration) return;
+        set((state) => state.project.id !== project.id || state.project.beatTrack.customSample?.resourceId !== resourceId ? state : {
+          project: { ...state.project, beatTrack: { ...state.project.beatTrack, customSample: { ...state.project.beatTrack.customSample, available: Boolean(sample) } } }
+        });
+      }).catch((error) => console.error("Failed to restore imported beat", error));
+    }
   },
 
   relinkFiles: (files) => {
@@ -1188,7 +1176,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     try {
       await persist(capturedProject);
       reconcileRegisteredFiles(historyTrackIds(get(), capturedProject));
-      commitCustomBeatSample(capturedProject.id);
       set((state) => state.project.id !== capturedProject.id
         ? state
         : {
@@ -1217,12 +1204,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   saveAs: async (name) => {
-    const sourceProjectId = get().project.id;
     const now = Date.now();
     const newProjectId = crypto.randomUUID();
     let capturedProject!: ProjectV1;
     let capturedRevision = 0;
-    cloneCustomBeatSample(sourceProjectId, newProjectId);
     set((state) => {
       capturedRevision = nextRevision();
       capturedProject = {
@@ -1246,7 +1231,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     try {
       await persist(capturedProject);
       reconcileRegisteredFiles(historyTrackIds(get(), capturedProject));
-      commitCustomBeatSample(capturedProject.id);
       set((state) => ({
         savedSnapshot: cloneProject(capturedProject),
         savedRevision: capturedRevision,
@@ -1293,7 +1277,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }
     const restored = cloneProject(state.savedSnapshot);
     reconcileRegisteredFiles(restored.tracks.map((track) => track.id));
-    discardCustomBeatSample(restored.id);
     set({
       project: restored,
       revision: state.savedRevision,
@@ -1309,3 +1292,21 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     });
   }
 }));
+
+const workspaceBeatOwner = {};
+let workspaceBeatProtectionActive = true;
+export function setWorkspaceBeatProtectionActive(active: boolean): void {
+  workspaceBeatProtectionActive = active;
+  if (!active) releaseBeatResources(workspaceBeatOwner);
+  else void retainWorkspaceBeatResources().catch((error) => console.error("Failed to protect active beat resources", error));
+}
+function retainWorkspaceBeatResources(): Promise<void> {
+  if (!workspaceBeatProtectionActive) return Promise.resolve();
+  const state = useProjectStore.getState();
+  const projects = [state.project, state.savedSnapshot, ...state.undoStack.map((entry) => entry.project), ...state.redoStack.map((entry) => entry.project)];
+  const ids = projects.flatMap((project) => project?.beatTrack.customSample?.resourceId ? [project.beatTrack.customSample.resourceId] : []);
+  return retainBeatResources(workspaceBeatOwner, ids);
+}
+useProjectStore.subscribe(() => {
+  void retainWorkspaceBeatResources().catch((error) => console.error("Failed to protect active beat resources", error));
+});

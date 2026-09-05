@@ -1,77 +1,52 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CustomBeatSampleRef } from "../domain/types";
 
-const audioMocks = vi.hoisted(() => ({
-  decodeFile: vi.fn()
-}));
-const dbMocks = vi.hoisted(() => ({
-  loadCustomBeatResource: vi.fn(),
-  saveCustomBeatResource: vi.fn()
-}));
+const mocks = vi.hoisted(() => ({ decodeFile: vi.fn(), loadCustomBeatResource: vi.fn() }));
+vi.mock("./audio", () => ({ decodeFile: mocks.decodeFile }));
+vi.mock("./db", () => ({ loadCustomBeatResource: mocks.loadCustomBeatResource }));
+import { clearCustomBeatSamples, decodeCustomBeatFile, getCustomBeatSample, loadCustomBeatSample } from "./customBeat";
 
-vi.mock("./audio", () => ({ decodeFile: audioMocks.decodeFile }));
-vi.mock("./db", () => dbMocks);
+function reference(resourceId: string): CustomBeatSampleRef {
+  return { resourceId, fileName: `${resourceId}.wav`, fileSize: 4, mimeType: "audio/wav", lastModified: 1, durationSeconds: 1, available: true };
+}
 
-import {
-  clearCustomBeatSamples,
-  discardCustomBeatSample,
-  getCustomBeatSample,
-  registerCustomBeatSample,
-  restoreCustomBeatSample
-} from "./customBeat";
+beforeEach(() => { clearCustomBeatSamples(); vi.resetAllMocks(); });
+describe("custom beat audio", () => {
+  it("normalizes the uploaded one-shot without changing channel balance", async () => {
+    mocks.decodeFile.mockResolvedValue({ channels: [Float32Array.from([0.5, -1]), Float32Array.from([0.25, 0.5])], sampleRate: 44_100, duration: 2 });
+    const result = await decodeCustomBeatFile(new File(["beat"], "beat.wav"));
+    expect(result.channels).toEqual([Float32Array.from([0.45, -0.9]), Float32Array.from([0.225, 0.45])]);
+    expect(result.durationSeconds).toBe(2);
+  });
 
-describe("custom beat resources", () => {
-  beforeEach(() => {
+  it.each([0, NaN, 4])("rejects an invalid duration of %s seconds", async (duration) => {
+    mocks.decodeFile.mockResolvedValue({ channels: [Float32Array.from([0.5])], sampleRate: 44_100, duration });
+    await expect(decodeCustomBeatFile(new File(["beat"], "beat.wav"))).rejects.toThrow();
+  });
+
+  it("rejects oversized input before decoding", async () => {
+    await expect(decodeCustomBeatFile(new File([new Uint8Array(10 * 1024 * 1024 + 1)], "beat.wav"))).rejects.toThrow("10 MB");
+    expect(mocks.decodeFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps distinct resource samples available when project history switches between them", async () => {
+    const a = { channels: [Float32Array.from([0.9, 0.2])], sampleRate: 44_100 };
+    const b = { channels: [Float32Array.from([0.1, 0.8])], sampleRate: 44_100 };
+    mocks.loadCustomBeatResource.mockImplementation(async (id) => id === "a" ? a : b);
+    await loadCustomBeatSample("a");
+    await loadCustomBeatSample("b");
+    expect(getCustomBeatSample(reference("a"))).toEqual(a);
+    expect(getCustomBeatSample(reference("b"))).toEqual(b);
     clearCustomBeatSamples();
-    audioMocks.decodeFile.mockReset();
-    dbMocks.loadCustomBeatResource.mockReset();
-    dbMocks.saveCustomBeatResource.mockReset().mockResolvedValue(undefined);
+    expect(getCustomBeatSample(reference("a"))).toBeUndefined();
+    await loadCustomBeatSample("a");
+    expect(getCustomBeatSample(reference("a"))).toEqual(a);
   });
 
-  it("normalizes and persists an uploaded sample", async () => {
-    audioMocks.decodeFile.mockResolvedValue({
-      channels: [Float32Array.from([0.5, -1]), Float32Array.from([0.25, 0.5])],
-      sampleRate: 44_100,
-      duration: 2
-    });
-    const file = new File(["beat"], "beat.wav", { type: "audio/wav" });
-
-    const reference = await registerCustomBeatSample("project-1", file);
-    expect(reference).toMatchObject({ fileName: "beat.wav", resourceId: expect.any(String), available: true });
-    expect(dbMocks.saveCustomBeatResource).toHaveBeenCalledWith(expect.objectContaining({
-      id: reference.resourceId,
-      sampleRate: 44_100,
-      channels: [Float32Array.from([0.45, -0.9]), Float32Array.from([0.225, 0.45])]
-    }));
-    expect(getCustomBeatSample("project-1")?.channels[0]).toEqual(Float32Array.from([0.45, -0.9]));
-  });
-
-  it("restores a persisted sample after the in-memory cache is cleared", async () => {
-    const resource = {
-      id: "resource-1",
-      sampleRate: 44_100,
-      channels: [Float32Array.from([0.9, 0.2])]
-    };
-    dbMocks.loadCustomBeatResource.mockResolvedValue(resource);
-
-    const restored = await restoreCustomBeatSample("project-1", {
-      resourceId: resource.id,
-      fileName: "beat.wav",
-      fileSize: 4,
-      mimeType: "audio/wav",
-      lastModified: 1,
-      durationSeconds: 1,
-      available: false
-    });
-
-    expect(restored).toBe(true);
-    expect(getCustomBeatSample("project-1")).toEqual({
-      channels: resource.channels,
-      sampleRate: resource.sampleRate
-    });
-  });
-
-  it("does not erase a saved sample when discarding an unsaved-only slot", () => {
-    discardCustomBeatSample("missing-project");
-    expect(getCustomBeatSample("missing-project")).toBeUndefined();
+  it("does not reuse a cached sample after its resource is missing", async () => {
+    mocks.loadCustomBeatResource.mockResolvedValueOnce({ channels: [Float32Array.from([0.9])], sampleRate: 44_100 }).mockResolvedValueOnce(undefined);
+    await loadCustomBeatSample("a");
+    expect(await loadCustomBeatSample("a")).toBeUndefined();
+    expect(getCustomBeatSample(reference("a"))).toBeUndefined();
   });
 });
