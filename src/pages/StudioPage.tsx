@@ -178,6 +178,7 @@ export function StudioPage() {
     if (
       !isDirty
       || saveState !== "idle"
+      || busy
       || saveDialog != null
       || unsavedPromptOpen
       || (!project.tracks.length && !hasSavedRecord)
@@ -195,6 +196,7 @@ export function StudioPage() {
         const latest = useProjectStore.getState();
         if (
           saved
+          && !latest.busy
           && !projectParam
           && latest.project.id === projectId
           && latest.hasSavedRecord
@@ -204,6 +206,7 @@ export function StudioPage() {
     return () => window.clearTimeout(timer);
   }, [
     hasSavedRecord,
+    busy,
     isDirty,
     project.id,
     project.tracks.length,
@@ -450,7 +453,7 @@ export function StudioPage() {
   };
 
   const applyProjectProperties = async (draft: ProjectPropertiesDraft, customBeatFile?: File) => {
-    await commitProjectProperties({
+    return commitProjectProperties({
       ...(draft.name !== project.name ? { name: draft.name } : {}),
       ...(draft.targetSpm !== project.targetSpm ? { targetSpm: draft.targetSpm } : {}),
       ...(draft.mappingMode !== project.mappingMode ? { mappingMode: draft.mappingMode } : {}),
